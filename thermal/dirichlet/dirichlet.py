@@ -63,7 +63,7 @@ def function_space(mesh, degree=1, ftype="Lagrange"):
 def dirichletbc(mesh, V):
     tdim = mesh.topology.dim
     fdim = tdim - 1
-    # breakpoint()
+    # cv breakpoint()
     bnd_left = locate_entities_boundary(
         mesh,
         dim=fdim,
@@ -137,12 +137,11 @@ def FEM(mesh):
 
 
 def output_results(msh, fem, analytical):
-    out_folder = Path("results")
+    out_folder = Path("xdmf")
     out_folder.mkdir(parents=True, exist_ok=True)
     with io.XDMFFile(msh.comm, out_folder / f"FEMsln_{numElements}.xdmf", "w") as file:
         file.write_mesh(msh)
         file.write_function(fem)
-
     return
 
 
@@ -189,13 +188,16 @@ def convergence(Ns, uh, u_ex):
 
 
 def main():
-    mesh, x = create_mesh(nx, ny)
-    fem_solution = FEM(mesh)
-    u_ufl = analytical(ufl)
-    u_analytical = u_ufl(x)
-    l2_error = error_L2(fem_solution, u_analytical)
-    hs, Es = convergence(numElements, fem_solution, u_analytical)
-    print(f"{l2_error}, {hs}, {Es}")
+    numElements = [(4, 4), (16, 16), (64, 64), (256, 256), (1024, 1024)]
+    for i, elem in enumerate(numElements):
+        nx = elem[0]
+        ny = elem[1]
+        mesh, x = create_mesh(nx, ny)
+        fem_solution = FEM(mesh)
+        u_ufl = analytical(ufl)
+        u_analytical = u_ufl(x)
+        hs, Es = convergence(numElements, fem_solution, u_analytical)
+        print(f"{hs}, {Es}")
     return
 
 
