@@ -180,3 +180,4 @@ cython_debug/
 .bash_history
 .Trash-*
 .cache
+*/results/
