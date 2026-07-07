@@ -12,17 +12,10 @@ from petsc4py.PETSc import ScalarType  # type: ignore
 import numpy as np
 
 import ufl
-from dolfinx import fem, io, mesh, plot
+from dolfinx import fem, io, mesh
 from dolfinx.fem.petsc import LinearProblem
-
+from dolfinx.mesh import locate_entities_boundary
 import sys
-
-
-# ## FEM setup and solution
-
-# ### Problem parameters
-
-# In[46]:
 
 
 BL_x = 0.0
@@ -43,19 +36,13 @@ T2 = 1
 Tinf = 0.5
 LL = TR_x - BL_x
 
-convergenceFile = Path(sys.argv[3])
 
-
-def u_analytical(mod):
+def analytical(mod):
     return lambda x: (
         q * LL**2 / (2 * k) * (x[0] / LL - (x[0] / LL) ** 2)
         + (T2 - T1) * (x[0] / LL)
         + T1
     )
-
-
-u_numpy = u_analytical(np)
-u_ufl = u_analytical(ufl)
 
 
 def create_mesh(nx, ny):
@@ -76,12 +63,13 @@ def function_space(mesh, degree=1, ftype="Lagrange"):
 def dirichletbc(mesh, V):
     tdim = mesh.topology.dim
     fdim = tdim - 1
-    bnd_left = mesh.locate_entities_boundary(
+    # breakpoint()
+    bnd_left = locate_entities_boundary(
         mesh,
         dim=fdim,
         marker=lambda x: np.isclose(x[0], BL_x),
     )
-    bnd_right = mesh.locate_entities_boundary(
+    bnd_right = locate_entities_boundary(
         mesh,
         dim=fdim,
         marker=lambda x: np.isclose(x[0], TR_x),
@@ -136,9 +124,8 @@ def solve_system(a, L, bcs):
     return problem.solve()
 
 
-def FEM():
+def FEM(mesh):
     # read yaml
-    mesh, x = create_mesh(nx, ny)
     V = function_space(mesh)
     # Dirichlet boundary conditions
     bcs_dirichlet = dirichletbc(mesh, V)
@@ -146,20 +133,11 @@ def FEM():
     a, L = problem_setup(mesh, V)
     # Solve and return solution
     fem_sln = solve_system(a, L, bcs_dirichlet)
-    # Obtain analytical solution
-    analytical = u_ufl(x)
-
-
-def post_processing(fem_sln, analytical):
-    secondary_vals()
-    visualization()
-    error_L2(fem_sln, analytical)
-    error_inf(fem_sln, analytical)
-    return
+    return fem_sln
 
 
 def output_results(msh, fem, analytical):
-    out_folder = Path("dirichlet")
+    out_folder = Path("results")
     out_folder.mkdir(parents=True, exist_ok=True)
     with io.XDMFFile(msh.comm, out_folder / f"FEMsln_{numElements}.xdmf", "w") as file:
         file.write_mesh(msh)
@@ -210,9 +188,15 @@ def convergence(Ns, uh, u_ex):
         return hs, Es
 
 
-l2_error = error_L2(uh, u_analytical)
-hs, Es = convergence(numElements, uh, u_analytical)
+def main():
+    mesh, x = create_mesh(nx, ny)
+    fem_solution = FEM(mesh)
+    u_ufl = analytical(ufl)
+    u_analytical = u_ufl(x)
+    l2_error = error_L2(fem_solution, u_analytical)
+    hs, Es = convergence(numElements, fem_solution, u_analytical)
+    print(f"{l2_error}, {hs}, {Es}")
+    return
 
 
-with open(out_folder / convergenceFile, mode="a") as c:
-    c.write(f"{hs}\t{Es}\n")
+main()
