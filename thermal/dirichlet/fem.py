@@ -130,16 +130,27 @@ def FEM(mesh):
     a, L = problem_setup(mesh, V)
     # Solve and return solution
     fem_sln = solve_system(a, L, bcs_dirichlet)
-    return fem_sln
+    secondary = calculate_secondary(fem_sln)
+    return fem_sln, secondary
 
 
-def output_results(msh, fem, analytical):
+def write_xdmf(msh, fem, filename):
     out_folder = Path("xdmf")
     out_folder.mkdir(parents=True, exist_ok=True)
-    with io.XDMFFile(msh.comm, out_folder / f"FEMsln_{numElements}.xdmf", "w") as file:
+    with io.XDMFFile(msh.comm, out_folder / f"{filename}.xdmf", "w") as file:
         file.write_mesh(msh)
         file.write_function(fem)
     return
+
+
+def calculate_secondary(uh):
+    degree = uh.function_space.ufl_element().degree
+    mesh = uh.function_space.mesh
+    W = fem.functionspace(mesh, ("DG", degree - 1, (mesh.geometry.dim,)))
+    sec_expr = fem.Expression(-k * ufl.grad(uh), W.element.interpolation_points)
+    secondary_W = fem.Function(W)
+    secondary_W.interpolate(sec_expr)
+    return secondary_W
 
 
 ## Compute the L2 error
@@ -191,9 +202,10 @@ def main():
         ny = elem[1]
         numElements = nx * ny
         mesh, x = create_mesh(nx, ny)
-        fem_solution = FEM(mesh)
+        fem_solution, secondary = FEM(mesh)
         u_ufl = analytical(ufl)
         u_analytical = u_ufl(x)
+        write_xdmf(mesh, secondary, f"heatflux_{numElements}")
         hs, Es = convergence(numElements, fem_solution, u_analytical)
         print(f"{hs}\t{Es}")
     return
