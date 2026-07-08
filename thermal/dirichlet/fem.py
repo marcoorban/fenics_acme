@@ -22,9 +22,6 @@ BL_x = 0.0
 BL_y = 0.0
 TR_x = 2.0
 TR_y = 1.0
-nx = int(sys.argv[1])
-ny = int(sys.argv[2])
-numElements = nx * ny
 k = 1
 A = 1
 q = 1
@@ -188,16 +185,17 @@ def convergence(Ns, uh, u_ex):
 
 
 def main():
-    numElements = [(4, 4), (16, 16), (64, 64), (256, 256), (1024, 1024)]
+    numElements = [(4, 4), (16, 16), (64, 64), (256, 256), (512, 512)]
     for i, elem in enumerate(numElements):
         nx = elem[0]
         ny = elem[1]
+        numElements = nx * ny
         mesh, x = create_mesh(nx, ny)
         fem_solution = FEM(mesh)
         u_ufl = analytical(ufl)
         u_analytical = u_ufl(x)
         hs, Es = convergence(numElements, fem_solution, u_analytical)
-        print(f"{hs}, {Es}")
+        print(f"{hs}\t{Es}")
     return
 
 
