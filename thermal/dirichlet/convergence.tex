@@ -1,4 +1,63 @@
 % GNUPLOT: LaTeX picture with Postscript
+\documentclass{minimal}
+% Set font size
+\makeatletter
+\def\@ptsize{-1}
+\InputIfFileExists{size9.clo}{}{%
+   \GenericError{(gnuplot) \space\space\space\@spaces}{%
+      Gnuplot Error: File `size9.clo' not found! Could not set font size%
+   }{See the gnuplot documentation for explanation.%
+   }{For using a font size a file `size<fontsize>.clo' has to exist.
+        Falling back ^^Jto default fontsize 10pt.}%
+  \def\@ptsize{0}
+  \input{size10.clo}%
+}%
+\makeatother
+% Load packages
+\usepackage{calc}
+\usepackage{graphicx}
+\usepackage{color}
+\usepackage{transparent}
+\makeatletter
+% Select an appropriate default driver (from TeXLive graphics.cfg)
+\begingroup
+  \chardef\x=0 %
+  % check pdfTeX
+  \@ifundefined{pdfoutput}{}{%
+    \ifcase\pdfoutput
+    \else
+      \chardef\x=1 %
+    \fi
+  }%
+  % check VTeX
+  \@ifundefined{OpMode}{}{%
+    \chardef\x=2 %
+  }%
+\expandafter\endgroup
+\ifcase\x
+  % default case
+  \PassOptionsToPackage{dvips}{geometry}
+\or
+  % pdfTeX is running in pdf mode
+  \PassOptionsToPackage{pdftex}{geometry}
+\else
+  % VTeX is running
+  \PassOptionsToPackage{vtex}{geometry}
+\fi
+\makeatother
+% Set papersize
+\usepackage[papersize={288.00bp,288.00bp},text={288.00bp,288.00bp}]{geometry}
+% No page numbers and no paragraph indentation
+\pagestyle{empty}
+\setlength{\parindent}{0bp}%
+% Load configuration file
+\InputIfFileExists{gnuplot.cfg}{%
+  \typeout{Using configuration file gnuplot.cfg}%
+}{%
+ \typeout{No configuration file gnuplot.cfg found.}%
+}%
+%
+\begin{document}
 \begingroup
   \makeatletter
   \providecommand\color[2][]{%
@@ -80,41 +139,42 @@
     \setlength{\fboxrule}{0.5pt}%
     \setlength{\fboxsep}{1pt}%
     \definecolor{tbcol}{rgb}{1,1,1}%
-\begin{picture}(6800.00,4520.00)%
+\begin{picture}(5760.00,5760.00)%
     \gplgaddtomacro\gplbacktext{%
       \csname LTb\endcsname%%
-      \put(714,562){\makebox(0,0)[r]{\strut{}10^{-6}}}%
+      \put(720,576){\makebox(0,0){\tiny $10^{-6}$}}%
       \csname LTb\endcsname%%
-      \put(714,1244){\makebox(0,0)[r]{\strut{}10^{-5}}}%
+      \put(720,1551){\makebox(0,0){\tiny $10^{-5}$}}%
       \csname LTb\endcsname%%
-      \put(714,1926){\makebox(0,0)[r]{\strut{}10^{-4}}}%
+      \put(720,2526){\makebox(0,0){\tiny $10^{-4}$}}%
       \csname LTb\endcsname%%
-      \put(714,2608){\makebox(0,0)[r]{\strut{}10^{-3}}}%
+      \put(720,3501){\makebox(0,0){\tiny $10^{-3}$}}%
       \csname LTb\endcsname%%
-      \put(714,3290){\makebox(0,0)[r]{\strut{}10^{-2}}}%
+      \put(720,4476){\makebox(0,0){\tiny $10^{-2}$}}%
       \csname LTb\endcsname%%
-      \put(714,3972){\makebox(0,0)[r]{\strut{}10^{-1}}}%
+      \put(720,5451){\makebox(0,0){\tiny $10^{-1}$}}%
       \csname LTb\endcsname%%
-      \put(812,386){\makebox(0,0){\strut{}10^{-3}}}%
+      \put(881,432){\makebox(0,0){\tiny $10^{-3}$}}%
       \csname LTb\endcsname%%
-      \put(2703,386){\makebox(0,0){\strut{}10^{-2}}}%
+      \put(2447,432){\makebox(0,0){\tiny $10^{-2}$}}%
       \csname LTb\endcsname%%
-      \put(4594,386){\makebox(0,0){\strut{}10^{-1}}}%
+      \put(4013,432){\makebox(0,0){\tiny $10^{-1}$}}%
       \csname LTb\endcsname%%
-      \put(6486,386){\makebox(0,0){\strut{}10^{0}}}%
+      \put(5579,432){\makebox(0,0){\tiny $10^{0}$}}%
+      \colorrgb{0.20,0.20,0.20}%%
+      \put(3805,2725){\makebox(0,0){\tiny $2$}}%
+      \colorrgb{0.20,0.20,0.20}%%
+      \put(3606,2421){\makebox(0,0){\tiny $1$}}%
     }%
     \gplgaddtomacro\gplfronttext{%
       \csname LTb\endcsname%%
-      \put(161,2267){\rotatebox{-270.00}{\makebox(0,0){\strut{}||u - u^h||_{L^2}}}}%
+      \put(188,3013){\rotatebox{-270.00}{\makebox(0,0){\small $\|u - u^h\|_{L^2}$}}}%
       \csname LTb\endcsname%%
-      \put(3649,123){\makebox(0,0){\strut{}element size h}}%
-      \colorrgb{0.75,0.00,1.00}%%
-      \put(3195,1926){\makebox(0,0)[l]{\strut{}slope=2.00}}%
-      \csname LTb\endcsname%%
-      \put(3649,4236){\makebox(0,0){\strut{}Solution convergence}}%
+      \put(3230,216){\makebox(0,0){\small $h$}}%
     }%
     \gplbacktext
-    \put(0,0){\includegraphics[width={340.00bp},height={226.00bp}]{convergence}}%
+    \put(0,0){\includegraphics[width={288.00bp},height={288.00bp}]{convergence-inc}}%
     \gplfronttext
   \end{picture}%
 \endgroup
+\end{document}
