@@ -34,12 +34,44 @@ Tinf = 0.5
 LL = TR_x - BL_x
 
 
-def analytical(mod):
-    return lambda x: (
+def analytical_primary(x):
+    return (
         q * LL**2 / (2 * k) * (x[0] / LL - (x[0] / LL) ** 2)
         + (T2 - T1) * (x[0] / LL)
         + T1
     )
+
+
+def analytical_secondary(x):
+    fx = -q * LL * A / 2 * (1 - 2 * x[0] / LL) - k * A / LL * (T2 - T1)
+    fy = 0
+    return ufl.as_vector([fx, fy])
+
+
+def plot_analytical_primary():
+    fine_mesh, x = create_mesh(1000, 1000)
+    W_fine = fem.functionspace(fine_mesh, ("CG", 1))
+    u_exact_fine_expr = fem.Expression(
+        analytical_primary(x), W_fine.element.interpolation_points
+    )
+    u_exact_fine = fem.Function(W_fine)
+    u_exact_fine.name = "T_a"
+    u_exact_fine.interpolate(u_exact_fine_expr)
+    write_xdmf(fine_mesh, u_exact_fine, "analytical_primary")
+    return None
+
+
+def plot_analytical_secondary():
+    fine_mesh, x = create_mesh(1000, 1000)
+    W_fine = fem.functionspace(fine_mesh, ("DG", 0, (fine_mesh.geometry.dim,)))
+    flux_exact_fine_expr = fem.Expression(
+        analytical_secondary(x), W_fine.element.interpolation_points
+    )
+    flux_exact_fine = fem.Function(W_fine)
+    flux_exact_fine.name = "analytical_flux"
+    flux_exact_fine.interpolate(flux_exact_fine_expr)
+    write_xdmf(fine_mesh, flux_exact_fine, "analytical_flux")
+    return None
 
 
 def create_mesh(nx, ny):
@@ -134,12 +166,12 @@ def FEM(mesh):
     return fem_sln, secondary
 
 
-def write_xdmf(msh, fem, filename):
+def write_xdmf(msh, fn, filename):
     out_folder = Path("xdmf")
     out_folder.mkdir(parents=True, exist_ok=True)
     with io.XDMFFile(msh.comm, out_folder / f"{filename}.xdmf", "w") as file:
         file.write_mesh(msh)
-        file.write_function(fem)
+        file.write_function(fn)
     return
 
 
@@ -203,8 +235,11 @@ def main():
         numElements = nx * ny
         mesh, x = create_mesh(nx, ny)
         fem_solution, secondary = FEM(mesh)
-        u_ufl = analytical(ufl)
-        u_analytical = u_ufl(x)
+        # Obtain analytical solutions
+        u_analytical = analytical_primary(x)
+        plot_analytical_primary()
+        plot_analytical_secondary()
+        # Write to xdmf for visualization
         write_xdmf(mesh, secondary, f"heatflux_{numElements}")
         hs, Es = convergence(numElements, fem_solution, u_analytical)
         print(f"{hs}\t{Es}")
