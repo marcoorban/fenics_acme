@@ -181,3 +181,5 @@ cython_debug/
 .Trash-*
 .cache
 */results/
+*.h5 
+*.xdmf
