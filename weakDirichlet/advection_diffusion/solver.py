@@ -1,0 +1,192 @@
+"""
+DOLFINx / FEniCSx routines: mesh construction, function spaces, physics
+parameters, and the Nitsche-method assembly and solve.
+"""
+
+import numpy as np
+from mpi4py import MPI
+
+import ufl
+from dolfinx import mesh, fem, default_scalar_type
+from dolfinx.fem.petsc import LinearProblem
+from dolfinx.io import XDMFFile
+
+
+# ================================================================== #
+#  Build mesh from config
+# ================================================================== #
+def build_mesh(cfg: dict):
+    """Create a rectangle mesh from the domain/mesh parameters."""
+    dom = cfg["domain"]
+    Lx, Ly = dom["Lx"], dom["Ly"]
+    Nx, Ny = dom["Nx"], dom["Ny"]
+
+    cell_map = {
+        "triangle": mesh.CellType.triangle,
+        "quadrilateral": mesh.CellType.quadrilateral,
+    }
+    cell_type = cell_map[dom["cell_type"]]
+
+    domain = mesh.create_rectangle(
+        MPI.COMM_WORLD,
+        [np.array([0.0, 0.0]), np.array([Lx, Ly])],
+        [Nx, Ny],
+        cell_type,
+    )
+    return domain
+
+
+# ================================================================== #
+#  Build the function space
+# ================================================================== #
+def build_function_space(domain, cfg: dict):
+    """Create the scalar H^1 function space from element parameters."""
+    elem = cfg["element"]
+    family = elem["family"]
+    degree = elem["degree"]
+    return fem.functionspace(domain, (family, degree))
+
+
+# ================================================================== #
+#  Build physical constants from config
+# ================================================================== #
+def build_physics(domain, cfg: dict):
+    """
+    Return the diffusivity tensor K (2x2 UFL matrix), the advection
+    velocity beta as a DOLFINx Constant, and the diffusion/advection
+    term switches (booleans) that turn each contribution on or off in
+    the bilinear/linear forms.
+    """
+    phys = cfg["physics"]
+
+    diffusion_on = phys.get(
+        "diffusion", True
+    )  # Returns True if the specified key does not exist.
+    advection_on = phys.get("advection", True)
+
+    # --- diffusivity tensor ---
+    d = phys["diffusivity"]
+    K = ufl.as_tensor(
+        [
+            [default_scalar_type(d["kxx"]), default_scalar_type(d["kxy"])],
+            [default_scalar_type(d["kyx"]), default_scalar_type(d["kyy"])],
+        ]
+    )
+
+    # --- advection velocity ---
+    vel = phys["velocity"]
+    beta = fem.Constant(
+        domain,
+        np.array([vel["beta_x"], vel["beta_y"]], dtype=default_scalar_type),
+    )
+
+    return K, beta, diffusion_on, advection_on
+
+
+# ================================================================== #
+#  Mark boundary facets and create ds measure
+# ================================================================== #
+def build_boundary_measure(domain):
+    """Tag all exterior facets with marker 1 and return ds measure."""
+    tdim = domain.topology.dim
+    fdim = tdim - 1
+    domain.topology.create_connectivity(fdim, tdim)
+    boundary_facets = mesh.exterior_facet_indices(domain.topology)
+
+    facet_tags = mesh.meshtags(
+        domain,
+        fdim,
+        boundary_facets,
+        np.full(len(boundary_facets), 1, dtype=np.int32),
+    )
+    ds = ufl.Measure("ds", domain=domain, subdomain_data=facet_tags)
+    return ds
+
+
+# ================================================================== #
+#  Assemble forms and solve
+# ================================================================== #
+def solve_nitsche(cfg: dict):
+    """Top-level driver: build everything, solve, return solution."""
+
+    # -- mesh & space ------------------------------------------------
+    domain = build_mesh(cfg)
+    V = build_function_space(domain, cfg)
+
+    u = ufl.TrialFunction(V)
+    v = ufl.TestFunction(V)
+
+    # -- physics -----------------------------------------------------
+    K, beta, diffusion_on, advection_on = build_physics(domain, cfg)
+
+    # Source term (hardcoded for now — easy to extend)
+    f = fem.Constant(domain, default_scalar_type(0.0))
+
+    # Dirichlet data (hardcoded for now)
+    x = ufl.SpatialCoordinate(domain)
+    g = ufl.sin(ufl.pi * x[1])
+
+    # -- boundary measure --------------------------------------------
+    ds = build_boundary_measure(domain)
+
+    # -- Nitsche parameters ------------------------------------------
+    gamma = fem.Constant(domain, default_scalar_type(cfg["nitsche"]["gamma"]))
+    h = ufl.CellDiameter(domain)
+    n = ufl.FacetNormal(domain)
+
+    # -- Bilinear form  a(u, v) -------------------------------------
+    # a = 0 * u * v * ufl.dx  # zero form to start from (kept UFL-typed)
+
+    if diffusion_on:
+        # Volume: diffusion with full tensor K
+        a = ufl.inner(K * ufl.grad(u), ufl.grad(v)) * ufl.dx
+
+    if advection_on:
+        # Volume: advection
+        a += ufl.dot(beta, ufl.grad(u)) * v * ufl.dx
+
+    # -- Linear form  L(v) ------------------------------------------
+    L = f * v * ufl.dx
+
+    if diffusion_on:
+        # Nitsche boundary (tag 1) — weakly imposed Dirichlet BC via the
+        # diffusive flux. These terms only make sense when diffusion is on.
+        # Normal flux through the tensor:  (K grad u) . n
+        Kgradu_n = ufl.dot(K * ufl.grad(u), n)
+        Kgradv_n = ufl.dot(K * ufl.grad(v), n)
+
+        a -= Kgradu_n * v * ds(1)  # consistency
+        a -= Kgradv_n * u * ds(1)  # symmetry
+        a += (gamma / h) * ufl.dot(ufl.dot(K, n), n) * u * v * ds(1)  # penalty
+
+        L -= Kgradv_n * g * ds(1)  # symmetry  (g)
+        L += (gamma / h) * ufl.dot(ufl.dot(K, n), n) * g * v * ds(1)  # penalty (g)
+
+    # -- Solve -------------------------------------------------------
+    slv = cfg["solver"]
+    problem = LinearProblem(
+        a,
+        L,
+        bcs=[],
+        petsc_options={
+            "ksp_type": slv["ksp_type"],
+            "pc_type": slv["pc_type"],
+        },
+    )
+    u_h = problem.solve()
+    u_h.name = "u"
+
+    # -- Diagnostics -------------------------------------------------
+    error_form = fem.form((u_h - g) ** 2 * ds(1))
+    error_local = fem.assemble_scalar(error_form)
+    error_global = np.sqrt(domain.comm.allreduce(error_local, op=MPI.SUM))
+    if domain.comm.rank == 0:
+        print(f"L2 boundary error ||u_h - g||_dOmega = {error_global:.6e}")
+
+    # -- Output ------------------------------------------------------
+    outname = cfg["output"]["filename"]
+    with XDMFFile(domain.comm, f"{outname}.xdmf", "w") as xdmf:
+        xdmf.write_mesh(domain)
+        xdmf.write_function(u_h)
+
+    return u_h

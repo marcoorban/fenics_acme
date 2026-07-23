@@ -1,0 +1,49 @@
+# ================================================================== #
+#  Advection-Diffusion with Nitsche BCs — input parameters
+# ================================================================== #
+
+# ---- Domain & mesh ------------------------------------------------ #
+domain:
+  Lx: 1.0                    # domain length in x
+  Ly: 1.0                    # domain length in y
+  Nx: 32                     # elements in x
+  Ny: 32                     # elements in y
+  cell_type: "triangle"      # "triangle" or "quadrilateral"
+
+# ---- Finite element ---------------------------------------------- #
+element:
+  family: "Lagrange"         # element family
+  degree: 1                  # polynomial order (1 = linear, 2 = quadratic, ...)
+
+# ---- Physical parameters ----------------------------------------- #
+physics:
+  # Term switches — turn the diffusion and/or advection contributions
+  # to the bilinear/linear forms on or off.
+  diffusion: false
+  advection: false
+
+  # Diffusivity — full symmetric tensor [kxx, kxy, kyx, kyy]
+  # For isotropic: set kxy = kyx = 0, kxx = kyy = kappa
+  diffusivity:
+    kxx: 1.0
+    kxy: 0.0
+    kyx: 0.0
+    kyy: 0.0
+
+  # Advection velocity components
+  velocity:
+    beta_x: 1.0
+    beta_y: 0.0
+
+# ---- Nitsche parameters ------------------------------------------ #
+nitsche:
+  gamma: 20.0                # penalty parameter
+
+# ---- Solver ------------------------------------------------------ #
+solver:
+  ksp_type: "preonly"
+  pc_type: "lu"
+
+# ---- Output ------------------------------------------------------ #
+output:
+  filename: "nitsche_solution"
