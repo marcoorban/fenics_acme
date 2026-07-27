@@ -19,7 +19,7 @@ element:
 physics:
   # Term switches — turn the diffusion and/or advection contributions
   # to the bilinear/linear forms on or off.
-  diffusion: false
+  diffusion: true
   advection: false
 
   # Diffusivity — full symmetric tensor [kxx, kxy, kyx, kyy]
@@ -37,7 +37,8 @@ physics:
 
 # ---- Nitsche parameters ------------------------------------------ #
 nitsche:
-  gamma: 20.0                # penalty parameter
+  penalty: 20.0   # penalty parameter
+  gamma: 1        # determines adjoint-consistency. Can be one or negative one.
 
 # ---- Solver ------------------------------------------------------ #
 solver:

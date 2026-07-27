@@ -118,7 +118,23 @@ def build_boundary_measure(domain):
         np.full(len(boundary_facets), 1, dtype=np.int32),
     )
     ds = ufl.Measure("ds", domain=domain, subdomain_data=facet_tags)
-    return ds
+    inlet_facets = mesh.locate_entities_boundary(domain, fdim, inlet_marker)
+    ds_inlet = ufl.Measure("ds", domain=domain, subdomain_data=inlet_facets)
+    outlet_facets = mesh.locate_entities_boundary(domain, fdim, outlet_marker)
+    ds_outlet = ufl.Measure("ds", domain=domain, subdomain_data=outlet_facets)
+    return (ds, ds_inlet, ds_outlet)
+
+
+def inlet_marker(x):
+    """Locates the inlet face of a rectangular domain, assuming it is
+    at x=0"""
+    return np.isclose(x[0], 0.0)
+
+
+def outlet_marker(x):
+    """Located the outlet face of a rectangular domain, by reading
+    the configuration file and obtaining the length of the rectangle."""
+    return np.isclose(x[0], OUTLET)
 
 
 # ================================================================== #
@@ -132,10 +148,9 @@ def solve_nitsche(cfg: dict):
     V = build_function_space(domain, cfg)
 
     u = ufl.TrialFunction(V)
-    v = ufl.TestFunction(V)
+    w = ufl.TestFunction(V)
 
     # -- physics -----------------------------------------------------
-    breakpoint()
     K, beta, diffusion_on, advection_on = build_physics(domain, cfg)
 
     # Source term (hardcoded for now — easy to extend)
@@ -147,10 +162,15 @@ def solve_nitsche(cfg: dict):
     g = x[0]
 
     # -- boundary measure --------------------------------------------
-    ds = build_boundary_measure(domain)
+    (ds, ds_i, ds_o) = build_boundary_measure(domain)
 
     # -- Nitsche parameters ------------------------------------------
+    # Check if gamma is either 1 or -1.
+    gamma_coeff = cfg["nitsche"]["gamma"]
+    if not (gamma_coeff == 1 or gamma_coeff == -1):
+        sys.exit("Gamma must be 1 or -1!")
     gamma = fem.Constant(domain, default_scalar_type(cfg["nitsche"]["gamma"]))
+    penalty = fem.Constant(domain, default_scalar_type(cfg["nitsche"]["penalty"]))
     h = ufl.CellDiameter(domain)
     n = ufl.FacetNormal(domain)
 
@@ -158,10 +178,10 @@ def solve_nitsche(cfg: dict):
     # a = 1 * u * v * ufl.dx  # zero form to start from (kept UFL-typed)
 
     # Volume: diffusion with full tensor K
-    diffusion = ufl.inner(K * ufl.grad(u), ufl.grad(v)) * ufl.dx
+    diffusion = ufl.inner(K * ufl.grad(u), ufl.grad(w)) * ufl.dx
 
     # Volume: advection
-    advection = ufl.dot(beta, ufl.grad(u)) * v * ufl.dx
+    advection = ufl.dot(beta, ufl.grad(u)) * w * ufl.dx
 
     if diffusion_on and advection_on:
         a = diffusion + advection
@@ -176,22 +196,32 @@ def solve_nitsche(cfg: dict):
         )
 
     # -- Linear form  L(v) ------------------------------------------
-    L = f * v * ufl.dx
+    L = f * w * ufl.dx
 
     if diffusion_on:
         # Nitsche boundary (tag 1) — weakly imposed Dirichlet BC via the
         # diffusive flux. These terms only make sense when diffusion is on.
         # Normal flux through the tensor:  (K grad u) . n
-        Kgradu_n = ufl.dot(K * ufl.grad(u), n)
-        Kgradv_n = ufl.dot(K * ufl.grad(v), n)
+        Kgradu_n = ufl.dot(-K * ufl.grad(u), n)
+        Kgradv_n = ufl.dot(-gamma * K * ufl.grad(w), n)
+        # Extra terms of bilinear form (LHS)
+        a += Kgradu_n * w * ds(1)  # consistency
+        a += Kgradv_n * u * ds(1)  # symmetry
+        # Extra terms for linear form (RHS)
+        L += Kgradv_n * g * ds(1)  # symmetry
 
-        a -= Kgradu_n * v * ds(1)  # consistency
-        a -= Kgradv_n * u * ds(1)  # symmetry
-        a += (gamma / h) * ufl.dot(ufl.dot(K, n), n) * u * v * ds(1)  # penalty
+        # Penalty terms
+        C = 1
+        knorm = np.linalg.norm(K, 1)
+        # Penalty for bilinear form (LHS)
+        a += (C * knorm / h) * w * u * ds(1)
+        # Penalty for linear form (RHS)
+        L += (C * knorm / h) * w * g * ds(1)
 
-        L -= Kgradv_n * g * ds(1)  # symmetry  (g)
-        L += (gamma / h) * ufl.dot(ufl.dot(K, n), n) * g * v * ds(1)  # penalty (g)
-
+    if advection_on:
+        a += w * ufl.dot(a, n) * u * ds(1)  # consistency
+        a += ufl.dot((-1) * a, n) * w * u * ds_i(1)  # symmetry, bilinear
+        L += ufl.dot((0) * a, n) * w * g * ds_i(1)  # symmetry, linear
     # -- Solve -------------------------------------------------------
     slv = cfg["solver"]
     problem = LinearProblem(
@@ -229,4 +259,5 @@ def solve_nitsche(cfg: dict):
 if __name__ == "__main__":
     config_path = sys.argv[1] if len(sys.argv) > 1 else "config.yaml"
     cfg = load_config(config_path)
+    OUTLET = cfg["domain"]["Lx"]
     solve_nitsche(cfg)
