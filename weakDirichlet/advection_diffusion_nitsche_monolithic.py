@@ -212,7 +212,8 @@ def solve_nitsche(cfg: dict):
 
         # Penalty terms
         C = 1
-        knorm = np.linalg.norm(K, 1)
+        breakpoint()
+        knorm = ufl.sqrt(ufl.inner(K, K))
         # Penalty for bilinear form (LHS)
         a += (C * knorm / h) * w * u * ds(1)
         # Penalty for linear form (RHS)
