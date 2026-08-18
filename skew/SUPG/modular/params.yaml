@@ -1,4 +1,4 @@
-fem:
+fem: 
   polyOrder: 1 
   polyFamily: "Lagrange"
 
@@ -29,6 +29,10 @@ boundary_conditions:
 Nitsche:
   gamma: -1.0
   C: 4.0
+
+polynomials:
+  polyOrder: 1
+  polyFamily: "Lagrange"
 
 
   
