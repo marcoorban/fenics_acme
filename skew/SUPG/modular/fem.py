@@ -77,6 +77,81 @@ class FEM_Solver:
         self.supgL_w = ufl.dot(p.beta, ufl.grad(self.w))
         return
 
+    def allBCs(self):
+        """Every boundary entry, however it ends up being imposed.
+
+        StrongForm and WeakForm impose the whole boundary their own way and
+        ignore the strong/weak split in the YAML; only StrongWeakForm reads
+        the two keys separately.
+        """
+        bc = self.boundary_conditions
+        return bc["strong"] + bc["weak"]
+
+    def applyStrongBCs(self):
+        """Boundary entries imposed by strong boundary conditions."""
+        return []
+
+    def applyWeakBCs(self):
+        """Boundary entries imposed by adding Nitsche terms to the forms."""
+        return None
+
+    def bilinearForm(self):
+        u, w, p = self.u, self.w, self.physics
+        flux = p.beta * u - p.kappa * ufl.grad(u)
+        self.a = -ufl.dot(ufl.grad(w), flux) * self.dx
+        self.a += self.supgL_w * self.tau * ufl.div(flux) * self.dx
+
+    def linearForm(self):
+        w, f, dx = self.w, self.physics.f, self.dx
+        self.L = w * f * dx
+        self.L += self.supgL_w * self.tau * f * dx
+
+    def inflow(self):
+        """Indicator that is 1 where the stream enters the domain, else 0.
+
+        dot(beta, n) is negative where the stream runs against the outward
+        normal, i.e. an inlet, and positive at an outlet. Evaluated per
+        quadrature point, so a single tagged boundary may be partly inlet and
+        partly outlet.
+        """
+        return ufl.conditional(ufl.lt(ufl.dot(self.physics.beta, self.n), 0.0), 1.0, 0.0)
+
+    def nitscheTerms(self, entry):
+        """Bilinear and linear contributions imposing u = value on one tag.
+
+        The volume form drops the boundary integral that integration by parts
+        produces, so the diffusive flux -kappa*grad(u).n is restored here as
+        the consistency term, together with the adjoint-consistency term
+        (weighted by gamma; gamma = -1 gives the symmetric variant) and the
+        C*kappa/h penalty.
+
+        The advective half of the flux carries boundary data only where the
+        stream enters the domain, so it is masked by the inflow indicator and,
+        being evaluated on the prescribed value, sits on the right-hand side.
+        """
+        u, w, p = self.u, self.w, self.physics
+        n, ds = self.n, self.ds(entry["tag"])
+        gamma, C = self.nitsche["gamma"], self.nitsche["C"]
+        g = fem.Constant(self.domain, default_scalar_type(entry["value"]))
+        penalty = C * p.kappa / self.h
+
+        a = -p.kappa * ufl.dot(ufl.grad(u), n) * w * ds
+        a += gamma * p.kappa * ufl.dot(ufl.grad(w), n) * u * ds
+        a += penalty * u * w * ds
+
+        L = gamma * p.kappa * ufl.dot(ufl.grad(w), n) * g * ds
+        L += penalty * g * w * ds
+        L += -self.inflow() * ufl.dot(p.beta, n) * g * w * ds
+
+        return a, L
+
+    def assemble(self):
+        """Build the forms in the order the boundary treatment requires."""
+        self.bilinearForm()
+        self.linearForm()
+        self.applyWeakBCs()
+        return
+
     def readMesh(self, meshFile):
         self.meshData = gmsh.read_from_msh(meshFile, MPI.COMM_WORLD, rank=0, gdim=2)
         return
@@ -91,9 +166,9 @@ class FEM_Solver:
             if hasattr(self.meshData, "mesh")
             else self.meshData
         )
-        tdim = self.domain.topology.dim
-        fdim = tdim - 1
-        self.domain.topology.create_connectivity(fdim, tdim)
+        self.tdim = self.domain.topology.dim
+        self.fdim = self.tdim - 1
+        self.domain.topology.create_connectivity(self.fdim, self.tdim)
         self.n = ufl.FacetNormal(self.domain)
         self.h = ufl.CellDiameter(self.domain)
         self.dx = ufl.Measure("dx", domain=self.domain, subdomain_data=self.ct)
@@ -107,6 +182,8 @@ class FEM_Solver:
         self.w = ufl.TestFunction(self.V)
 
     def solve(self):
+        self.bcs = self.applyStrongBCs()
+        self.applyWeakBCs()
         problem = LinearProblem(
             self.a,
             self.L,
@@ -130,30 +207,57 @@ class FEM_Solver:
 
 
 class StrongForm(FEM_Solver):
-    def bilinearForm(self):
-        u, w, p = self.u, self.w, self.physics
-        self.a = -ufl.dot(ufl.grad(w), p.beta * u - p.kappa * ufl.grad(u)) * self.dx
+    def applyStrongBCs(self):
+        """Build the DirichletBC objects for the strongly imposed boundaries.
 
-    def linearForm(self):
-        w, f, dx = self.w, self.physics.f, self.dx
-        self.L = w * f * dx
-        self.L += self.supgL_w * self.tau * f * dx
+        Each entry gives a facet tag and a value; the tag is looked up in the
+        facet MeshTags to get the facets, those become dofs of V, and the pair
+        (value, dofs) becomes a DirichletBC. Returns the list for handing to
+        LinearProblem.
+        """
+        bcs = []
+        for bc in self.allBCs():
+            facets = self.ft.find(bc["tag"])
+            dofs = fem.locate_dofs_topological(self.V, self.fdim, facets)
+            value = fem.Constant(self.domain, default_scalar_type(bc["value"]))
+            bcs.append(fem.dirichletbc(value, dofs, self.V))
+        return bcs
 
 
 class WeakForm(FEM_Solver):
-    def bilinearForm(self):
-        pass
-
-    def linearForm(self):
-        pass
+    def applyWeakBCs(self):
+        """Impose every boundary weakly, adding its Nitsche terms to the forms."""
+        for bc in self.allBCs():
+            a, L = self.nitscheTerms(bc)
+            self.a += a
+            self.L += L
+        return
 
 
 class StrongWeakForm(FEM_Solver):
-    def bilinearForm(self):
-        pass
+    def applyStrongBCs(self):
+        """Build the DirichletBC objects for the strongly imposed boundaries.
 
-    def linearForm(self):
-        pass
+        Each entry gives a facet tag and a value; the tag is looked up in the
+        facet MeshTags to get the facets, those become dofs of V, and the pair
+        (value, dofs) becomes a DirichletBC. Returns the list for handing to
+        LinearProblem.
+        """
+        bcs = []
+        for bc in self.boundary_conditions["strong"]:
+            facets = self.ft.find(bc["tag"])
+            dofs = fem.locate_dofs_topological(self.V, self.fdim, facets)
+            value = fem.Constant(self.domain, default_scalar_type(bc["value"]))
+            bcs.append(fem.dirichletbc(value, dofs, self.V))
+        return bcs
+
+    def applyWeakBCs(self):
+        """Impose only the boundaries tagged weak in the YAML via Nitsche."""
+        for bc in self.boundary_conditions["weak"]:
+            a, L = self.nitscheTerms(bc)
+            self.a += a
+            self.L += L
+        return
 
 
 if __name__ == "__main__":
