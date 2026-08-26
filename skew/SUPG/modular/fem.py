@@ -276,5 +276,15 @@ class StrongWeakForm(FEM_Solver):
 
 
 if __name__ == "__main__":
-    strong = StrongForm("params.yaml", "rectangle.msh")
-    strong.print_params()
+    solvers = {
+        "solutionStrong": StrongForm,
+        "solutionWeak": WeakForm,
+        "solutionStrongWeak": StrongWeakForm,
+    }
+    for outputFile, Solver in solvers.items():
+        solver = Solver("params.yaml", "rectangle.msh")
+        solver.assemble()
+        solver.solve()
+        solver.write_results(outputFile)
+        u = solver.u_h.x.array
+        print(f"{Solver.__name__:16s} min={u.min():+.4f} max={u.max():+.4f} -> {outputFile}.xdmf")

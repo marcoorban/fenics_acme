@@ -19,9 +19,9 @@ boundary_conditions:
     - tag: 4
       value: 0.0
 
-  inlet: [1, 2, 5]
-  outlet: [3, 4]
-    
+  # Inflow and outflow are decided per quadrature point from dot(beta, n),
+  # so no inlet/outlet tag lists are needed here.
+
 Nitsche:
   gamma: -1.0
   C: 4.0
