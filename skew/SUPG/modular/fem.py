@@ -64,15 +64,19 @@ class FEM_Solver:
     def create_supg(self):
         """Streamline operator and stabilisation parameter for SUPG.
 
-        tau uses the doubly-asymptotic form tau = (h / 2|beta|) * xi(Pe),
-        with xi(Pe) = coth(Pe) - 1/Pe and Pe the cell Peclet number. Built
-        from the Constants rather than the raw floats so that changing
-        physics.kappa.value at runtime is picked up without rebuilding.
+        tau = (h / 2|beta|) * min(1, Pe / (3 p^2)), the piecewise-linear form
+        of xi(Pe), with Pe built from the streamline diffusivity
+        dot(beta, K beta) / dot(beta, beta) so that it stays correct if K
+        becomes anisotropic. Built from the Constants rather than the raw
+        floats so that changing physics.kappa.value at runtime is picked up
+        without rebuilding.
         """
         p = self.physics
+        order = self.polynomials["polyOrder"]
         beta_norm = ufl.sqrt(ufl.dot(p.beta, p.beta))
-        Pe = beta_norm * self.h / (2.0 * p.kappa)
-        xi = 1.0 / ufl.tanh(Pe) - 1.0 / Pe
+        kappa_beta = ufl.dot(p.beta, p.kappa * p.beta) / ufl.dot(p.beta, p.beta)
+        Pe = beta_norm * self.h / (2.0 * kappa_beta)
+        xi = ufl.min_value(1.0, Pe / (3.0 * order**2))
         self.tau = self.h / (2.0 * beta_norm) * xi
         self.supgL_w = ufl.dot(p.beta, ufl.grad(self.w))
         return
@@ -116,32 +120,44 @@ class FEM_Solver:
         """
         return ufl.conditional(ufl.lt(ufl.dot(self.physics.beta, self.n), 0.0), 1.0, 0.0)
 
+    def outflow(self):
+        """Indicator that is 1 where the stream leaves the domain, else 0."""
+        return ufl.conditional(ufl.gt(ufl.dot(self.physics.beta, self.n), 0.0), 1.0, 0.0)
+
     def nitscheTerms(self, entry):
         """Bilinear and linear contributions imposing u = value on one tag.
 
         The volume form drops the boundary integral that integration by parts
         produces, so the diffusive flux -kappa*grad(u).n is restored here as
         the consistency term, together with the adjoint-consistency term
-        (weighted by gamma; gamma = -1 gives the symmetric variant) and the
-        C*kappa/h penalty.
+        (weighted by -gamma, the sign convention of nitsche_strong.py, so that
+        gamma = -1 selects the non-symmetric variant) and the C*kappa/h
+        penalty.
 
-        The advective half of the flux carries boundary data only where the
-        stream enters the domain, so it is masked by the inflow indicator and,
-        being evaluated on the prescribed value, sits on the right-hand side.
+        The advective half of the flux is upwinded. Where the stream enters the
+        domain the flux is carried by the prescribed value, so that term is
+        masked by the inflow indicator and sits on the right-hand side. Where
+        the stream leaves, the flux is carried by the unknown itself, so the
+        outflow term restores the boundary integral dropped by the volume form
+        and belongs on the left. Without it nothing constrains u on an outflow
+        boundary once C*kappa/h is small, and the operator is near-singular
+        there.
         """
         u, w, p = self.u, self.w, self.physics
         n, ds = self.n, self.ds(entry["tag"])
         gamma, C = self.nitsche["gamma"], self.nitsche["C"]
         g = fem.Constant(self.domain, default_scalar_type(entry["value"]))
         penalty = C * p.kappa / self.h
+        beta_n = ufl.dot(p.beta, n)
 
         a = -p.kappa * ufl.dot(ufl.grad(u), n) * w * ds
-        a += gamma * p.kappa * ufl.dot(ufl.grad(w), n) * u * ds
+        a += -gamma * p.kappa * ufl.dot(ufl.grad(w), n) * u * ds
         a += penalty * u * w * ds
+        a += self.outflow() * beta_n * u * w * ds
 
-        L = gamma * p.kappa * ufl.dot(ufl.grad(w), n) * g * ds
+        L = -gamma * p.kappa * ufl.dot(ufl.grad(w), n) * g * ds
         L += penalty * g * w * ds
-        L += -self.inflow() * ufl.dot(p.beta, n) * g * w * ds
+        L += -self.inflow() * beta_n * g * w * ds
 
         return a, L
 
@@ -183,7 +199,6 @@ class FEM_Solver:
 
     def solve(self):
         self.bcs = self.applyStrongBCs()
-        self.applyWeakBCs()
         problem = LinearProblem(
             self.a,
             self.L,
