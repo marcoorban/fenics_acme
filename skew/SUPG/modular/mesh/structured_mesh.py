@@ -41,8 +41,8 @@ def build_mesh(nx, ny, lx=1.0, ly=1.0, y_split=0.4):
     if not 0 < js < ny:
         raise ValueError("y_split must lie strictly inside (0, ly).")
 
-    tag = {}          # (i, j) -> node tag
-    blocks = []       # (dim, entity_tag, [(i, j), ...]) in node-output order
+    tag = {}  # (i, j) -> node tag
+    blocks = []  # (dim, entity_tag, [(i, j), ...]) in node-output order
     counter = 0
 
     def add(entity_dim, entity_tag, ij_list):
@@ -60,11 +60,11 @@ def build_mesh(nx, ny, lx=1.0, ly=1.0, y_split=0.4):
     add(0, 5, [(0, js)])
 
     # --- dim 1: interior nodes of each curve, in curve direction ----------
-    add(1, 1, [(i, 0) for i in range(1, nx)])                    # bottom  1->2
-    add(1, 2, [(nx, j) for j in range(1, ny)])                   # right   2->3
-    add(1, 3, [(i, ny) for i in range(nx - 1, 0, -1)])           # top     3->4
-    add(1, 4, [(0, j) for j in range(ny - 1, js, -1)])           # l_top   4->5
-    add(1, 5, [(0, j) for j in range(js - 1, 0, -1)])            # l_bot   5->1
+    add(1, 1, [(i, 0) for i in range(1, nx)])  # bottom  1->2
+    add(1, 2, [(nx, j) for j in range(1, ny)])  # right   2->3
+    add(1, 3, [(i, ny) for i in range(nx - 1, 0, -1)])  # top     3->4
+    add(1, 4, [(0, j) for j in range(ny - 1, js, -1)])  # l_top   4->5
+    add(1, 5, [(0, j) for j in range(js - 1, 0, -1)])  # l_bot   5->1
 
     # --- dim 2: interior nodes of the surface -----------------------------
     add(2, 1, [(i, j) for j in range(1, ny) for i in range(1, nx)])
@@ -112,8 +112,12 @@ def write_msh(path, nx, ny, lx=1.0, ly=1.0, y_split=0.4):
 
     w("$PhysicalNames\n6")
     for dim, ptag, name in [
-        (1, 1, "left_bottom"), (1, 2, "bottom"), (1, 3, "right"),
-        (1, 4, "top"), (1, 5, "left_top"), (2, 10, "domain"),
+        (1, 1, "left_bottom"),
+        (1, 2, "bottom"),
+        (1, 3, "right"),
+        (1, 4, "top"),
+        (1, 5, "left_top"),
+        (2, 10, "domain"),
     ]:
         w(f'{dim} {ptag} "{name}"')
     w("$EndPhysicalNames")
@@ -122,7 +126,7 @@ def write_msh(path, nx, ny, lx=1.0, ly=1.0, y_split=0.4):
     ys = fmt(ly * js / ny)
     LX, LY, Z = fmt(lx), fmt(ly), "0"
     w("$Entities\n5 5 1 0")
-    w(f"1 0 0 0 0")                      # point tags carry no physical group
+    w(f"1 0 0 0 0")  # point tags carry no physical group
     w(f"2 {LX} 0 0 0")
     w(f"3 {LX} {LY} 0 0")
     w(f"4 0 {LY} 0 0")
@@ -150,12 +154,12 @@ def write_msh(path, nx, ny, lx=1.0, ly=1.0, y_split=0.4):
     # --- $Elements --------------------------------------------------------
     w(f"$Elements\n{len(edges) + 1} {n_elems} 1 {n_elems}")
     eid = 0
-    for ctag, segs in edges:                       # type 1 = 2-node line
+    for ctag, segs in edges:  # type 1 = 2-node line
         w(f"1 {ctag} 1 {len(segs)}")
         for a, b in segs:
             eid += 1
             w(f"{eid} {a} {b}")
-    w(f"2 1 3 {len(quads)}")                       # type 3 = 4-node quad
+    w(f"2 1 3 {len(quads)}")  # type 3 = 4-node quad
     for q in quads:
         eid += 1
         w(f"{eid} {q[0]} {q[1]} {q[2]} {q[3]}")
@@ -168,18 +172,24 @@ def write_msh(path, nx, ny, lx=1.0, ly=1.0, y_split=0.4):
 
 
 def main():
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     p.add_argument("-o", "--output", default="rectangle.msh")
     p.add_argument("--nx", type=int, default=65, help="cells in x (default 65)")
     p.add_argument("--ny", type=int, default=65, help="cells in y (default 65)")
     p.add_argument("--lx", type=float, default=1.0)
     p.add_argument("--ly", type=float, default=1.0)
-    p.add_argument("--y-split", type=float, default=0.4,
-                   help="left boundary split height (default 0.4)")
+    p.add_argument(
+        "--y-split",
+        type=float,
+        default=0.4,
+        help="left boundary split height (default 0.4)",
+    )
     a = p.parse_args()
 
-    nn, nq, ne = write_msh(a.output, a.nx, a.ny, a.lx, a.ly, a.y_split)
+    outputName = f"rectangle-{a.nx}x{a.ny}.msh"
+    nn, nq, ne = write_msh(outputName, a.nx, a.ny, a.lx, a.ly, a.y_split)
     print(f"{a.output}: {a.nx}x{a.ny} structured quad grid")
     print(f"  nodes {nn}, quads {nq}, elements {ne} (incl. boundary lines)")
     print(f"  hx = {a.lx / a.nx:.6g}, hy = {a.ly / a.ny:.6g}")
