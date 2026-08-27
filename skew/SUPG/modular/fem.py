@@ -8,6 +8,7 @@ from dolfinx import default_scalar_type, fem, geometry
 from dolfinx.fem.petsc import LinearProblem
 from dolfinx.io import XDMFFile, gmsh
 from mpi4py import MPI
+from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
 
 
 class Physics:
@@ -232,7 +233,9 @@ class FEM_Solver:
 
         bb_tree = geometry.bb_tree(self.domain, self.domain.topology.dim)
         cell_candidates = geometry.compute_collisions_points(bb_tree, points)
-        colliding_cells = geometry.compute_colliding_cells(self.domain, cell_candidates, points)
+        colliding_cells = geometry.compute_colliding_cells(
+            self.domain, cell_candidates, points
+        )
 
         found_points, cells = [], []
         for i in range(n):
@@ -264,6 +267,56 @@ class FEM_Solver:
             f.write(f"# elements={n_cells} solver={type(self).__name__}\n")
             for xi, ui in zip(x, u):
                 f.write(f"{xi:.16e} {ui:.16e}\n")
+
+    def write_field(self, datFile):
+        """Write x, y, u_h at every dof of V to datFile.
+
+        Meant to be run on the finest mesh of a convergence study; the
+        resulting file is what convergence() reads back as the reference
+        solution for coarser runs.
+        """
+        coords = self.V.tabulate_dof_coordinates()
+        u = self.u_h.x.array
+        n_cells = self.domain.topology.index_map(self.tdim).size_global
+        with open(datFile, "w") as f:
+            f.write(f"# elements={n_cells} solver={type(self).__name__}\n")
+            for (x, y, _), ui in zip(coords, u):
+                f.write(f"{x:.16e} {y:.16e} {ui:.16e}\n")
+
+    def convergence(self, refDatFile):
+        """L2 norm of (u_h - u_ref) against a reference field on disk.
+
+        refDatFile holds x, y, u_h triples written by write_field(), usually
+        from a much finer mesh than self.domain's. Since those points don't
+        coincide with this solver's dofs, the reference is rebuilt as a
+        scattered-data interpolant (piecewise-linear via Delaunay
+        triangulation, falling back to nearest-neighbour for query points
+        outside the reference point cloud's convex hull, e.g. right at the
+        domain boundary) and then interpolated onto V with the same
+        Function.interpolate machinery fem.py already uses elsewhere, so the
+        error integral below is a plain UFL form assembled with the mesh's
+        own quadrature.
+        """
+        data = np.loadtxt(refDatFile)
+        ref_points, ref_values = data[:, :2], data[:, 2]
+        linear = LinearNDInterpolator(ref_points, ref_values)
+        nearest = NearestNDInterpolator(ref_points, ref_values)
+
+        def eval_ref(x):
+            pts = x[:2].T
+            values = linear(pts)
+            missing = np.isnan(values)
+            if np.any(missing):
+                values[missing] = nearest(pts[missing])
+            return values
+
+        u_ref = fem.Function(self.V)
+        u_ref.interpolate(eval_ref)
+
+        diff = self.u_h - u_ref
+        error_form = fem.form(ufl.inner(diff, diff) * self.dx)
+        error_local = fem.assemble_scalar(error_form)
+        return np.sqrt(self.domain.comm.allreduce(error_local, op=MPI.SUM))
 
     def plot(self, plotFile):
         pass
@@ -325,6 +378,7 @@ SOLVERS = {
     "strong": (StrongForm, "solutionStrong"),
     "weak": (WeakForm, "solutionWeak"),
     "weakStrong": (StrongWeakForm, "solutionStrongWeak"),
+    "strongWeak": (StrongWeakForm, "solutionStrongWeak"),
 }
 
 
@@ -337,9 +391,23 @@ def parse_args():
     parser.add_argument(
         "--sample-line",
         action="store_true",
+        help="Write u(x, y=0.5) samples to {output}.dat",
+    )
+    parser.add_argument(
+        "--write-field",
+        action="store_true",
         help=(
-            "Append u(x, y=0.5) samples to output/line_samples.dat, for a "
-            "convergence comparison across runs"
+            "Write x, y, u_h at every dof to {output}_field.dat, for use as "
+            "a convergence reference by another run's --convergence "
+            "(typically run on the finest mesh of a study)"
+        ),
+    )
+    parser.add_argument(
+        "--convergence",
+        metavar="REF_DAT_FILE",
+        help=(
+            "Compute the L2 error against a reference field written by "
+            "--write-field on another (usually finer) mesh"
         ),
     )
     return parser.parse_args()
@@ -358,7 +426,12 @@ if __name__ == "__main__":
     solver.write_results(outputFile)
     if args.sample_line:
         solver.write_line_sample(f"{outputFile}.dat")
+    if args.write_field:
+        solver.write_field(f"{outputFile}_field.dat")
     u = solver.u_h.x.array
     print(
         f"{Solver.__name__:16s} min={u.min():+.4f} max={u.max():+.4f} -> {outputFile}.xdmf"
     )
+    if args.convergence:
+        error = solver.convergence(args.convergence)
+        print(f"{Solver.__name__:16s} L2 error vs {args.convergence} = {error:.6e}")
