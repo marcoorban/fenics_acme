@@ -1,0 +1,19 @@
+[project]
+name = "1d"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "marcoorban", email = "marco.orban@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "gmsh>=4.15.2",
+]
+
+[project.scripts]
+1d = "1d:main"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
