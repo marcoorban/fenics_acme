@@ -183,3 +183,4 @@ cython_debug/
 */results/
 *.h5 
 *.xdmf
+*/output/
