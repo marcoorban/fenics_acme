@@ -1,0 +1,19 @@
+physics:
+  kappa: 0.01  # Coefficient of diffusivity
+  beta_mag: 1.0   # Velocity magnitude of stream
+  f: 0.0          # Source function magnitude 
+ 
+boundary_conditions:
+  inlet: 1.0
+  outlet: 0.0
+
+Nitsche:
+  gamma: 1.0
+  C: 4.0
+
+polynomials:
+  polyOrder: 1
+  polyFamily: "Lagrange"
+
+
+ 
