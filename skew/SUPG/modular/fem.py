@@ -1,10 +1,13 @@
-import ufl
-import project_io
+import argparse
+from pathlib import Path
+
 import numpy as np
-from mpi4py import MPI
-from dolfinx import fem, default_scalar_type
+import project_io
+import ufl
+from dolfinx import default_scalar_type, fem, geometry
 from dolfinx.fem.petsc import LinearProblem
 from dolfinx.io import XDMFFile, gmsh
+from mpi4py import MPI
 
 
 class Physics:
@@ -55,11 +58,9 @@ class FEM_Solver:
         self.boundary_conditions = params["boundary_conditions"]
         self.nitsche = params["Nitsche"]
         self.polynomials = params["polynomials"]
-        return
 
     def create_physics(self):
         self.physics = Physics(self.params["physics"], self.domain)
-        return
 
     def create_supg(self):
         """Streamline operator and stabilisation parameter for SUPG.
@@ -79,7 +80,6 @@ class FEM_Solver:
         xi = ufl.min_value(1.0, Pe / (3.0 * order**2))
         self.tau = self.h / (2.0 * beta_norm) * xi
         self.supgL_w = ufl.dot(p.beta, ufl.grad(self.w))
-        return
 
     def allBCs(self):
         """Every boundary entry, however it ends up being imposed.
@@ -97,7 +97,7 @@ class FEM_Solver:
 
     def applyWeakBCs(self):
         """Boundary entries imposed by adding Nitsche terms to the forms."""
-        return None
+        return
 
     def bilinearForm(self):
         u, w, p = self.u, self.w, self.physics
@@ -118,11 +118,15 @@ class FEM_Solver:
         quadrature point, so a single tagged boundary may be partly inlet and
         partly outlet.
         """
-        return ufl.conditional(ufl.lt(ufl.dot(self.physics.beta, self.n), 0.0), 1.0, 0.0)
+        return ufl.conditional(
+            ufl.lt(ufl.dot(self.physics.beta, self.n), 0.0), 1.0, 0.0
+        )
 
     def outflow(self):
         """Indicator that is 1 where the stream leaves the domain, else 0."""
-        return ufl.conditional(ufl.gt(ufl.dot(self.physics.beta, self.n), 0.0), 1.0, 0.0)
+        return ufl.conditional(
+            ufl.gt(ufl.dot(self.physics.beta, self.n), 0.0), 1.0, 0.0
+        )
 
     def nitscheTerms(self, entry):
         """Bilinear and linear contributions imposing u = value on one tag.
@@ -166,11 +170,9 @@ class FEM_Solver:
         self.bilinearForm()
         self.linearForm()
         self.applyWeakBCs()
-        return
 
     def readMesh(self, meshFile):
         self.meshData = gmsh.read_from_msh(meshFile, MPI.COMM_WORLD, rank=0, gdim=2)
-        return
 
     def print_params(self):
         print(self.physics)
@@ -212,10 +214,56 @@ class FEM_Solver:
     def postProcess(self):
         pass
 
+    def sample_line(self, y=0.5, n=201):
+        """Evaluate u_h at n points along the line y=const.
+
+        x spans the mesh's bounding box in x, independent of mesh
+        resolution, so rows from different meshes/solvers line up
+        point-for-point for a convergence comparison. Points that don't
+        land in any local cell (relevant only for MPI runs, where each
+        rank owns a partition of the mesh) are dropped.
+        """
+        coords = self.domain.geometry.x
+        xmin, xmax = coords[:, 0].min(), coords[:, 0].max()
+        xs = np.linspace(xmin, xmax, n)
+        points = np.zeros((n, 3))
+        points[:, 0] = xs
+        points[:, 1] = y
+
+        bb_tree = geometry.bb_tree(self.domain, self.domain.topology.dim)
+        cell_candidates = geometry.compute_collisions_points(bb_tree, points)
+        colliding_cells = geometry.compute_colliding_cells(self.domain, cell_candidates, points)
+
+        found_points, cells = [], []
+        for i in range(n):
+            links = colliding_cells.links(i)
+            if len(links) > 0:
+                found_points.append(points[i])
+                cells.append(links[0])
+
+        found_points = np.array(found_points)
+        u_values = self.u_h.eval(found_points, cells).flatten()
+        return found_points[:, 0], u_values
+
     def write_results(self, outputFile):
         with XDMFFile(self.domain.comm, f"{outputFile}.xdmf", "w") as xdmf:
             xdmf.write_mesh(self.domain)
             xdmf.write_function(self.u_h)
+
+    def write_line_sample(self, datFile, y=0.5, n=201):
+        """Write x, u(x, y) samples to datFile, one file per run.
+
+        The header records the cell count and solver class as metadata; the
+        caller is expected to give each run (mesh resolution x boundary
+        treatment) its own datFile, so a convergence study ends up as one
+        file per case rather than one shared, ever-growing file.
+        """
+        x, u = self.sample_line(y=y, n=n)
+        n_cells = self.domain.topology.index_map(self.tdim).size_global
+        with open(datFile, "w") as f:
+            f.write(f"# elements={n_cells} solver={type(self).__name__}\n")
+            for xi, ui in zip(x, u):
+                f.write(f"{xi:.16e} {ui:.16e}\n")
 
     def plot(self, plotFile):
         pass
@@ -246,7 +294,6 @@ class WeakForm(FEM_Solver):
             a, L = self.nitscheTerms(bc)
             self.a += a
             self.L += L
-        return
 
 
 class StrongWeakForm(FEM_Solver):
@@ -272,19 +319,46 @@ class StrongWeakForm(FEM_Solver):
             a, L = self.nitscheTerms(bc)
             self.a += a
             self.L += L
-        return
+
+
+SOLVERS = {
+    "strong": (StrongForm, "solutionStrong"),
+    "weak": (WeakForm, "solutionWeak"),
+    "weakStrong": (StrongWeakForm, "solutionStrongWeak"),
+}
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Solve the skew advection-diffusion problem."
+    )
+    parser.add_argument("mesh_file", help="Path to the Gmsh .msh file")
+    parser.add_argument("solver", choices=SOLVERS, help="Boundary condition treatment")
+    parser.add_argument(
+        "--sample-line",
+        action="store_true",
+        help=(
+            "Append u(x, y=0.5) samples to output/line_samples.dat, for a "
+            "convergence comparison across runs"
+        ),
+    )
+    return parser.parse_args()
 
 
 if __name__ == "__main__":
-    solvers = {
-        "solutionStrong": StrongForm,
-        "solutionWeak": WeakForm,
-        "solutionStrongWeak": StrongWeakForm,
-    }
-    for outputFile, Solver in solvers.items():
-        solver = Solver("params.yaml", "rectangle.msh")
-        solver.assemble()
-        solver.solve()
-        solver.write_results(outputFile)
-        u = solver.u_h.x.array
-        print(f"{Solver.__name__:16s} min={u.min():+.4f} max={u.max():+.4f} -> {outputFile}.xdmf")
+    args = parse_args()
+    Solver, outputFile = SOLVERS[args.solver]
+    outputDir = Path("output")
+    outputDir.mkdir(exist_ok=True)
+    outputFile = Path.joinpath(outputDir, f"{outputFile}_{Path(args.mesh_file).stem}")
+
+    solver = Solver("params.yaml", args.mesh_file)
+    solver.assemble()
+    solver.solve()
+    solver.write_results(outputFile)
+    if args.sample_line:
+        solver.write_line_sample(f"{outputFile}.dat")
+    u = solver.u_h.x.array
+    print(
+        f"{Solver.__name__:16s} min={u.min():+.4f} max={u.max():+.4f} -> {outputFile}.xdmf"
+    )
