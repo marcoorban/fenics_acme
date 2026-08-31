@@ -173,10 +173,6 @@ class FEM_Solver:
     def readMesh(self, meshFile):
         self.meshData = gmsh.read_from_msh(meshFile, MPI.COMM_WORLD, rank=0, gdim=1)
 
-    def print_params(self):
-        print(self.physics)
-        print(self.boundary_conditions, self.nitsche, self.polynomials)
-
     def create_geometry(self):
         self.domain, self.ct, self.ft = (
             (self.meshData.mesh, self.meshData.cell_tags, self.meshData.facet_tags)
@@ -252,20 +248,21 @@ class FEM_Solver:
                 f.write(f"{xi:.16e} {ui:.16e}\n")
 
     def convergence(self):
-        """L2 error of u_h against the theoretical outer solution.
+        """L2 error of u_h against the exact 1D advection-diffusion solution.
 
-        In the advection-dominated limit this problem approaches, diffusion
-        only matters in a thin layer at the outlet; away from it the
-        solution is just the inlet value carried unchanged by the stream.
-        So the reference is u=1 everywhere except u=0 at the outlet itself,
-        interpolated onto V the same way u_h is built, which for Lagrange
-        elements assigns nodal values directly and leaves the drop to the
-        outlet confined to the last element.
+        For beta*u' - kappa*u'' = 0 on [0, L] with u(0)=1, u(L)=0, the exact
+        solution is u(x) = 1 - (e^(Pe*xi) - 1) / (e^Pe - 1), where
+        xi = x/L in [0, 1] and Pe = beta_mag*L/kappa is the domain (not
+        cell) Peclet number. Interpolated onto V the same way u_h is built.
         """
-        outlet_x = self.domain.geometry.x[:, 0].max()
+        p = self.physics
+        xmin, xmax = self.domain.geometry.x[:, 0].min(), self.domain.geometry.x[:, 0].max()
+        L = xmax - xmin
+        Pe = p.beta_mag * L / p.kappa_value
 
         def u_exact(x):
-            return np.where(np.isclose(x[0], outlet_x), 0.0, 1.0)
+            xi = (x[0] - xmin) / L
+            return 1.0 - (np.exp(Pe * xi) - 1.0) / (np.exp(Pe) - 1.0)
 
         u_ref = fem.Function(self.V)
         u_ref.interpolate(u_exact)
