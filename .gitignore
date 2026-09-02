@@ -181,7 +181,34 @@ cython_debug/
 .Trash-*
 .cache
 */results/
-*.h5 
+*.h5
 *.xdmf
 *.dat
 *.msh
+
+# ---> OpenFOAM (navStokes/openFoam)
+# Generated mesh: points/faces/owner/neighbour/boundary have no extension,
+# so this has to be a directory ignore rather than an extension-based one.
+navStokes/openFoam/**/constant/polyMesh/
+
+# Time-step result directories (field data written every write interval);
+# names are numeric/decimal, so glob on a leading digit. 0/ and 0.orig/
+# hold case setup (initial/boundary conditions), not solver output, so
+# those are kept.
+navStokes/openFoam/**/[0-9]*/
+!navStokes/openFoam/**/0/
+!navStokes/openFoam/**/0.orig/
+
+# Parallel-run decomposition, post-processing, and function-object output
+navStokes/openFoam/**/processor*/
+navStokes/openFoam/**/postProcessing/
+navStokes/openFoam/**/VTK/
+navStokes/openFoam/**/dynamicCode/
+
+# ParaView reader marker, solver logs, exported VTK formats
+navStokes/openFoam/**/*.foam
+navStokes/openFoam/**/log.*
+navStokes/openFoam/**/*.vtk
+navStokes/openFoam/**/*.vtu
+navStokes/openFoam/**/*.vtp
+navStokes/openFoam/**/*.pvd
