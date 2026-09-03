@@ -208,6 +208,9 @@ navStokes/openFoam/**/dynamicCode/
 # ParaView reader marker, solver logs, exported VTK formats
 navStokes/openFoam/**/*.foam
 navStokes/openFoam/**/log.*
+# log.* above is meant for OpenFOAM run logs (log.foamRun, log.icoFoam...)
+# but also matches the project log; keep that one tracked.
+!navStokes/openFoam/**/log.md
 navStokes/openFoam/**/*.vtk
 navStokes/openFoam/**/*.vtu
 navStokes/openFoam/**/*.vtp
