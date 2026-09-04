@@ -1,0 +1,19 @@
+[project]
+name = "openfoam"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "MorbanACME", email = "marco.orban@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "gmsh>=4.15.2",
+]
+
+[project.scripts]
+openfoam = "openfoam:main"
+
+[build-system]
+requires = ["uv_build>=0.12.9,<0.13.0"]
+build-backend = "uv_build"
