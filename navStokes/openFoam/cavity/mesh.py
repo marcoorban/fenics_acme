@@ -32,7 +32,7 @@ gmsh.model.geo.mesh.setRecombine(2, surface)
 # Extrude returns a list with the created entities in the following order:
 #   out[0] = far cap (z=d), out[1] = volume,
 #   out[2..5] = side surfaces extruded from bottom, right, top, left
-out = gmsh.model.geo.extrude([(2, surface)], 0, 0, d, numElements=[1], recombine=True)
+out = gmsh.model.geo.extrude([(2, surface)], 0, 0, d/100, numElements=[1], recombine=True)
 farCap, volume, bottomWall, rightWall, lidWall, leftWall = out
 
 gmsh.model.geo.synchronize()
