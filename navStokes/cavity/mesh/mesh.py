@@ -1,6 +1,11 @@
 import gmsh 
 import sys
+from pathlib import Path 
+import os
 
+scriptDir = os.path.dirname(os.path.realpath(__file__))
+fileName = "cavity.msh"
+meshFile = str(scriptDir) + "/" + fileName
 gmsh.initialize()
 
 d = 1
@@ -45,7 +50,7 @@ gmsh.model.addPhysicalGroup(3, [volume[1]], name="domain")
 
 gmsh.model.mesh.generate(3)
 gmsh.option.setNumber("Mesh.MshFileVersion", 2.2)
-gmsh.write("cavity.msh")
+gmsh.write(meshFile)
 if '-nopopup' not in sys.argv:
     gmsh.fltk.run()
 gmsh.finalize()

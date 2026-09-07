@@ -1,0 +1,14 @@
+set terminal pngcairo size 1200,800
+set output "h.png"
+set xlabel "y"
+set ylabel "u"
+
+plot "benchmarks/ghia1982_table1_u_vertical.dat" using 1:2 with line title "Ghia (1981)", \
+     "postProcessing/sampleDict/161/verticalCenterline.xy" using 1:2 with line title "OpenFOAM"
+
+set output "v.png"
+set xlabel "x"
+set ylabel "v"
+plot "benchmarks/ghia1982_table2_v_horizontal.dat" using 1:2 with line title "Ghia", \
+     "postProcessing/sampleDict/161/horizontalCenterline.xy" using 1:3 with line title "OpenFOAM"
+
