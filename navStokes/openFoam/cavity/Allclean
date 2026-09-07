@@ -1,0 +1,20 @@
+#!/bin/bash
+
+# Run from this directory
+cd "${0%/*}" || exit 1
+
+# Remove all time directories except 0
+for d in */; do
+    name="${d%/}"
+
+    if [ "$name" = "0" ]; then
+        continue
+    fi
+
+    if [[ "$name" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        echo "Removing $name"
+        rm -rf "$name"
+    fi
+done
+
+#------------------------------------------------------------------------------
