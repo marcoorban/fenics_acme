@@ -1,6 +1,6 @@
 # navStokes/cavity — Log
 
-_Started: 2026-09-04 | Last updated: 2026-09-09_
+_Started: 2026-09-04 | Last updated: 2026-09-10_
 
 ## Action Items
 
@@ -15,14 +15,15 @@ _Started: 2026-09-04 | Last updated: 2026-09-09_
       here would make the comparison invalid (RANS-averaged result vs.
       a laminar reference solution), the same reasoning that ruled out
       RANS in the old `channel_flow` project.
-- [ ] `mesh/mesh.py` still uses a **uniform 50-point transfinite mesh,
-      no wall clustering** (`points = 50`, no `Bump`/`Progression`) for
-      every Re from 100 to 5000. As Re increases, near-wall shear
-      layers thin and corner eddies shrink/multiply — Ghia's own
-      higher-Re solutions needed a finer graded grid (129×129) plus a
-      grid-independence check to resolve those features. Likely root
-      cause of the growing Re=3200/5000 mismatch; consider a graded
-      (wall-clustered) mesh if pursuing those Re further.
+- [ ] 2026-09-10: `mesh/mesh.py` bumped from 50 to **130 points
+      (129×129 cells)** — now matches Ghia's own grid resolution at
+      their higher Re. Still **uniform, no wall clustering**
+      (`Bump`/`Progression`); as Re increases, near-wall shear layers
+      thin and corner eddies shrink further, and Ghia's own solutions
+      still relied on grid-independence checks even at 129×129, so this
+      may not fully resolve the Re=3200/5000 mismatch on its own — worth
+      re-plotting against Ghia at this resolution before deciding
+      whether wall clustering is still needed.
 - [ ] Before refining the mesh, rule out non-convergence first (cheaper
       check): `residualControl` was only added to `fvSolution` on
       2026-09-09 — the existing Re=3200/5000 runs may predate it and
@@ -38,6 +39,11 @@ _Started: 2026-09-04 | Last updated: 2026-09-09_
       considered but not applied — see `plot_notes.md`.
 - [ ] This session's `.gitignore` fix + reorg are still uncommitted —
       review before committing.
+- [ ] 2026-09-10 parallel-run test left real (non-throwaway) output:
+      `processor0-3/` and a converged `t≈1.7334` result from whatever
+      Re was configured at the time, produced while verifying the
+      `decomposePar`/`mpirun`/`reconstructPar` pipeline end-to-end. Not
+      cleaned up — decide whether to keep or clear it.
 
 ## Objective
 
@@ -79,6 +85,26 @@ intentional). Layout: `navStokes/cavity/` holds `mesh.py`, `log.md`,
   that: it checks each listed field's *initial* residual every time step
   and calls an early stop once all of them are below threshold
   simultaneously.
+- **2026-09-10** — Case can now run in parallel: added
+  `system/decomposeParDict` and updated `foamRun.fish` to
+  `decomposePar && mpirun -np N foamRun -solver incompressibleFluid
+  -parallel && reconstructPar -latestTime && foamPostProcess -func
+  sampleDict -latestTime`.
+  Why 4 initially, then 8: machine has 20 logical threads (i7-12700,
+  12 cores × 2-way hyperthreading). Started at 4 (conservative,
+  matched the then-2401-cell mesh); bumped to 8
+  (`numberOfSubdomains 8; simpleCoeffs { n (4 2 1); ... }` — a 4×2
+  split in x/y, 1 in z) the same day the mesh grew to 129×129
+  (16641 cells), which justifies more subdomains. `-np` here must
+  always match `numberOfSubdomains` if either changes.
+  Verified end-to-end by actually running it both times, not just
+  reading the dictionary syntax: at `-np 4`, `decomposePar` → parallel
+  solve (converged via `residualControl` at t≈1.73s) → `reconstructPar`
+  → `foamPostProcess` all completed with exit code 0; at `-np 8` on the
+  129×129 mesh, `decomposePar` alone was re-verified (subdomains came
+  out well balanced: 2079–2081 cells each, despite 129 not dividing
+  evenly by 4 or 2 — `simple` decomposition absorbs the remainder
+  gracefully).
 
 ## Learnings (technical gotchas worth not re-deriving)
 
@@ -96,8 +122,12 @@ intentional). Layout: `navStokes/cavity/` holds `mesh.py`, `log.md`,
   connectivity.
 - Validation-plot convention: tabulated benchmark data as discrete
   markers, current simulation as a line — not both `with line`. With
-  multiple Re on one figure, differentiate further within each family:
-  marker shape per Re for Ghia, dash pattern per Re for OpenFOAM.
+  multiple Re on one figure, differentiate further with one color per
+  Re (Okabe-Ito colorblind-safe palette), shared between a Ghia marker
+  and its matching OpenFOAM line, plus marker shape per Re as a
+  redundant cue. Dash patterns per Re were tried first and dropped —
+  with 5 overlapping curves, distinguishing dash patterns at crossings
+  was harder to read than just using color.
 - `git status`'s `R` (rename) entries can pair an unrelated staged
   deletion + addition purely by content similarity — not proof of an
   actual move. Untracked files also don't travel with a `git`-aware
@@ -114,6 +144,16 @@ intentional). Layout: `navStokes/cavity/` holds `mesh.py`, `log.md`,
   lid-cavity flow doesn't turbulence-transition the way 3D flow does;
   don't reach for a turbulence model to fix a high-Re mismatch against
   this benchmark specifically.
+- `decomposePar` decomposes *every* field file present in `0/`,
+  regardless of whether the active `simulationType` actually reads it.
+  `0/nut`, `0/k`, `0/epsilon`, `0/omega`, `0/nuTilda` were leftover
+  stock-tutorial files (wrong patch names too: `movingWall`/
+  `fixedWalls`/`frontAndBack` instead of this case's `lid`/`wall`/
+  `empty`) — harmless in a serial `simulationType laminar` run since
+  the solver never touches them, but fatal to `decomposePar`. Deleted
+  all five (2026-09-10; same cleanup already done for `channel_flow`).
+  Worth checking `0/` for this kind of dead tutorial leftover on any
+  future case before trying to parallelize it.
 
 ## References
 

@@ -4,7 +4,7 @@
 # -- reference vs. present-result is the standard convention for this kind
 # of validation figure.
 
-set terminal pngcairo enhanced font "Helvetica,14" size 1000,1000
+set terminal pngcairo enhanced font "Helvetica,14" size 1400,1000
 set border linewidth 1.2
 set tics in
 set mxtics 2

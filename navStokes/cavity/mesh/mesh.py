@@ -24,7 +24,7 @@ loop = gmsh.model.geo.addCurveLoop([bottom, right, top, left], 15)
 surface = gmsh.model.geo.addPlaneSurface([loop], 21)
 
 # Add transfinite points
-points = 50
+points = 130
 gmsh.model.geo.mesh.setTransfiniteCurve(bottom, points)
 gmsh.model.geo.mesh.setTransfiniteCurve(top, points)
 gmsh.model.geo.mesh.setTransfiniteCurve(left, points)

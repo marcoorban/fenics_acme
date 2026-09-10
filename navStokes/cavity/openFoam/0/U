@@ -23,7 +23,7 @@ boundaryField
     lid
     {
         type            fixedValue;
-        value           uniform (50 0 0);
+        value           uniform (32 0 0);
     }
 
     wall
