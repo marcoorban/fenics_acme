@@ -22,11 +22,16 @@ boundaryField
 {
     inlet
     {
-        // Parabolic (Poiseuille) inflow profile:
-        //   U(0, y) = 4 Um y (H - y) / H^2,  V = 0
-        // Um is the single value to edit to change flow conditions -- the
-        // resulting Reynolds number uses the *mean* velocity Ubar = (2/3) Um,
-        // i.e. Re = Ubar*D/nu (see constant/physicalProperties for nu).
+        // Time-modulated parabolic (Poiseuille) inflow profile (DFG 2D-3):
+        //   U(0, y, t) = 4 Um y (H - y) / H^2 * sin(pi*t/8),  V = 0
+        // Um is the same peak-velocity constant as the steady/2D-2 cases
+        // (unchanged); the sin(pi*t/8) factor ramps the whole profile from
+        // 0 up to its 2D-2 peak shape at t=2s, back through 0 at t=8s
+        // (matching controlDict's endTime -- one full half-sine cycle, not
+        // periodic shedding like 2D-2). Reynolds number reasoning (mean
+        // velocity Ubar = (2/3) Um, Re = Ubar*D/nu) still applies to the
+        // spatial profile's amplitude; nu is unchanged (see
+        // constant/physicalProperties).
         type            codedFixedValue;
         value           uniform (0 0 0);
         name            parabolicInlet;
@@ -35,6 +40,9 @@ boundaryField
         #{
             const scalar Um = 1.5;   // peak (centerline) inlet velocity [m/s]
             const scalar H  = 0.41;  // channel height [m]
+            const scalar t  = this->db().time().value();
+
+            const scalar timeFactor = Foam::sin(Foam::constant::mathematical::pi*t/8.0);
 
             const vectorField& Cf = patch().Cf();
             vectorField& field = *this;
@@ -42,7 +50,7 @@ boundaryField
             forAll(Cf, i)
             {
                 const scalar y = Cf[i].y();
-                field[i] = vector(4.0*Um*y*(H - y)/sqr(H), 0, 0);
+                field[i] = vector(4.0*Um*y*(H - y)/sqr(H)*timeFactor, 0, 0);
             }
         #};
     }
