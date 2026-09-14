@@ -1,0 +1,71 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://openfoam.org
+    \\  /    A nd           | Version:  14
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    format      ascii;
+    class       volVectorField;
+    location    "0";
+    object      U;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dimensions      [velocity];
+
+internalField   uniform (0 0 0);
+
+boundaryField
+{
+    inlet
+    {
+        // Parabolic (Poiseuille) inflow profile:
+        //   U(0, y) = 4 Um y (H - y) / H^2,  V = 0
+        // Um is the single value to edit to change flow conditions -- the
+        // resulting Reynolds number uses the *mean* velocity Ubar = (2/3) Um,
+        // i.e. Re = Ubar*D/nu (see constant/physicalProperties for nu).
+        type            codedFixedValue;
+        value           uniform (0 0 0);
+        name            parabolicInlet;
+
+        code
+        #{
+            const scalar Um = 1.5;   // peak (centerline) inlet velocity [m/s]
+            const scalar H  = 0.41;  // channel height [m]
+
+            const vectorField& Cf = patch().Cf();
+            vectorField& field = *this;
+
+            forAll(Cf, i)
+            {
+                const scalar y = Cf[i].y();
+                field[i] = vector(4.0*Um*y*(H - y)/sqr(H), 0, 0);
+            }
+        #};
+    }
+
+    outlet
+    {
+        type            zeroGradient;
+    }
+
+    wall
+    {
+        type            noSlip;
+    }
+
+    cylinder
+    {
+        type            noSlip;
+    }
+
+    empty
+    {
+        type            empty;
+    }
+}
+
+// ************************************************************************* //

@@ -1,0 +1,31 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://openfoam.org
+    \\  /    A nd           | Version:  14
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    format      ascii;
+    class       dictionary;
+    location    "system";
+    object      pressureDropDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+// DFG 2D-1 benchmark's delta_p = p(front stagnation point) - p(rear
+// stagnation point), at the cylinder surface directly upstream/downstream
+// of the center (cx=0.2, cy=0.2, R=0.05): front=(0.15,0.2), rear=(0.25,0.2).
+type            probes;
+libs            ("libsampling.so");
+
+fields          (p);
+
+probeLocations
+(
+    (0.15 0.2 0.005)
+    (0.25 0.2 0.005)
+);
+
+// ************************************************************************* //

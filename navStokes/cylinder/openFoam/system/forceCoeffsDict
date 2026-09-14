@@ -1,0 +1,39 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://openfoam.org
+    \\  /    A nd           | Version:  14
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    format      ascii;
+    class       dictionary;
+    location    "system";
+    object      forceCoeffsDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+type            forceCoeffs;
+libs            ("libforces.so");
+
+patches         (cylinder);
+
+rho             rhoInf;
+rhoInf          1;              // incompressible: nominal reference density
+
+// Cylinder center, see mesh/mesh.py (cx, cy) and 0/U's codedFixedValue.
+// z is the extrusion mid-plane (thickness = 0.1*D = 0.01).
+CofR            (0.2 0.2 0.005);
+liftDir         (0 1 0);
+dragDir         (1 0 0);
+pitchAxis       (0 0 1);
+
+// Reference values for non-dimensionalizing Cd/Cl -- see log.md. Ubar =
+// (2/3) Um from the parabolic inlet profile; must be updated whenever Um
+// (0/U) changes, e.g. Re=20 (Um=0.3) -> Ubar=0.2, Re=100 (Um=1.5) -> Ubar=1.
+magUInf         1.0;    // reference (mean) velocity Ubar
+lRef            0.1;    // reference length: cylinder diameter D
+Aref            0.001;  // frontal area: lRef * span (span = 0.1*D = 0.01)
+
+// ************************************************************************* //
