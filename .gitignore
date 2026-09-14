@@ -219,3 +219,21 @@ navStokes/**/openFoam/**/*.vtk
 navStokes/**/openFoam/**/*.vtu
 navStokes/**/openFoam/**/*.vtp
 navStokes/**/openFoam/**/*.pvd
+
+# openFoam-results/: curated *permanent* snapshots of finished cases (see
+# cylinder/log.md #openFoam 2026-09-14) -- unlike openFoam/ above, this
+# isn't gitignored wholesale, since the point is to keep small summary
+# artifacts (e.g. validation plots) tracked even though the raw openFoam/
+# working directory that produced them is regenerated on every rerun.
+# But the raw solver output copied in alongside those artifacts (mesh,
+# per-time-step field data, postprocessing dat/probe files) is exactly
+# the same kind of bulky, regenerable data ignored under openFoam/ above
+# -- e.g. a two-shedding-period snapshot for one case was 176M of field
+# data. *.msh/*.dat are already caught by the blanket rules above; this
+# adds the time-directory field data (numeric name, one level under the
+# case directory -- NOT `**`, which would also match case directory
+# names like `2D-2_unsteady` since those also start with a digit) and
+# postProcessing/ (extensionless probe output, e.g. pressureDropDict's
+# "p" file, isn't caught by *.dat).
+navStokes/**/openFoam-results/*/[0-9]*/
+navStokes/**/openFoam-results/*/postProcessing/
