@@ -17,4 +17,17 @@ for d in */; do
     fi
 done
 
+# Remove stale parallel-decomposition output. These carry their own
+# time directories and mesh addressing (cellProcAddressing etc.) sized for
+# whatever mesh existed when decomposePar last ran -- if the mesh is
+# regenerated afterwards (different cell count), leftover processorN/<time>
+# field files silently mismatch the next decomposePar/reconstructPar's
+# addressing (FOAM FATAL IO ERROR: size X is not equal to the given value
+# of Y) instead of erroring at decompose time.
+for d in processor*/; do
+    name="${d%/}"
+    echo "Removing $name"
+    rm -rf "$name"
+done
+
 #------------------------------------------------------------------------------
