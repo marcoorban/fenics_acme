@@ -4,6 +4,19 @@ _Started: 2026-09-10_
 
 ## Action Items
 
+- [x] **✅ 2026-09-14 — DFG 2D-3 (Re=100, time-ramped inlet) run,
+      analyzed, matches the published benchmark closely.** Same
+      case/mesh as `2D-2`, `0/U`'s inlet BC extended with a
+      `sin(pi*t/8)` time factor (`Um=1.5` unchanged), `controlDict`
+      `endTime` `5 -> 8s`. `Cd max=2.9632` at `t=3.92s` (ref. `~2.9483`,
+      ~0.5% off), `Cl max=0.4803` at `t=5.72s` (ref. `~0.4651`, ~3%
+      off), `delta_p(t=8)=-0.131359`. Full numbers/method in
+      `results.csv`. Snapshot (mesh + `t=3.92s`/`5.72s`/`8s` field dirs
+      + postprocessing data) in `openFoam-results/2D-3_unsteady/`;
+      `plots/forceCoeffs.png` (via `plot2d-3.gp`, `Cd`/`Cl` vs. `t`
+      with horizontal `9a`-reference dashed lines) also copied there
+      and is the only thing from that directory actually git-tracked
+      (see the `openFoam-results/` gitignore correction below).
 - [x] **✅ 2026-09-14 — DFG 2D-2 (Re=100, unsteady) analyzed and matches
       the published benchmark closely** (`St=0.3007` vs. ref. `~0.300`,
       `Cd mean=3.202` vs. ref. `~3.2`, `Cl max=1.001` vs. ref. `~1.0`).
@@ -377,6 +390,35 @@ with `foamRun -solver incompressibleFluid`, `simulationType laminar`.
   solver output gitignored" as the pattern for `2D-3` (oscillating
   inlet, unsteady, not started) too, rather than repeating the
   raw-data-first approach here.
+- **🚨 2026-09-14 — `reconstructPar -latestTime` only reconstructs the
+  single latest time, and `foamPostProcess ... -latestTime` (run in
+  serial, against the reconstructed case) can only see whatever times
+  actually got reconstructed** — for the `2D-3` run this meant
+  `forceCoeffsDict` initially produced a single-row `.dat` file (just
+  `t=8`), not the full time series needed to find `Cd`/`Cl` maxima
+  over the run. The `-latestTime` flag on `foamPostProcess` does NOT
+  mean "sweep every written time and use the latest mesh/field state
+  for setup" the way it might read — it means "only evaluate at
+  whichever time is latest among what's actually present on disk".
+  **Fix, and the better approach in general**: the full per-time-step
+  field data was never lost — it's still in the `processorN/`
+  parallel-decomposed directories (`foamRun`'s native output before
+  any reconstruction). Ran `foamPostProcess -func forceCoeffsDict
+  -parallel` (via `mpirun`) directly against that decomposed data
+  instead — computes the same force integrals over each subdomain's
+  slice of the `cylinder` patch and combines via MPI reduction, so it
+  gets the complete `402`-point time series without ever reconstructing
+  full field snapshots for every step (which would've been `~1.9G` at
+  `4.7M`/step here, entirely wasted just to compute two scalars per
+  step). **General lesson: for scalar/integral postprocessing
+  (`forceCoeffs`, `pressureDrop`, etc.), prefer `-parallel` against the
+  decomposed case over reconstructing first** — reconstruction is only
+  actually needed when you want full field snapshots (for
+  visualization, or to save to `openFoam-results/`), not for
+  postprocessing utilities that reduce a field to a handful of numbers
+  per time. Needed a *targeted* `reconstructPar -time 3.92,5.72` (comma
+  list, not `-latestTime`) afterward anyway, to get the actual `U`/`p`
+  field snapshots at the `Cd`/`Cl`-max times for `openFoam-results/`.
 
 ## References
 
