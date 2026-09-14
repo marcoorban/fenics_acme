@@ -93,6 +93,88 @@ Each entry has a **scope** tag and one or more **topic** tags:
   Harmless for a laminar Dirichlet velocity BC, but would matter for
   wall-function/`wallShearStress`/`yPlus` post-processing on that patch.
   Worth checking on any future case's `constant/polyMesh/boundary`.
+- **[cylinder]** — `Allclean` in both cases only removed top-level time
+  directories — it never touched `processorN/`!! Those directories
+  carry their *own* time directories and their *own* mesh addressing
+  (`cellProcAddressing` etc.), both sized for whatever mesh existed
+  when `decomposePar` last ran. Regenerate the mesh afterward (e.g. a
+  `mesh.py` parameter change) and those leftovers don't error at
+  `decomposePar` time — they sit there silently until
+  `reconstructPar -latestTime` (or a solve reaching a coincidentally
+  matching write time) picks up the stale data and collides with the
+  freshly-rebuilt addressing: `FOAM FATAL IO ERROR: size X is not
+  equal to the given value of Y`!! Caught in `cylinder` after several
+  mesh revisions left `processor0-7` holding a full old solved run
+  (~2080 cells/subdomain) while the current mesh decomposes to
+  ~13352/subdomain. Fixed **both** `Allclean` scripts to also
+  `rm -rf processor*/` — same latent bug was sitting in `cavity` too,
+  just hadn't been triggered yet since its mesh hasn't changed since
+  its last parallel run.
+- **🚨 [cylinder]** — A "Courant number blowing up" crash is **not
+  automatically a timestep problem**, even though it looks exactly
+  like one!! Before shrinking `deltaT`, check **mean vs. max**
+  Courant number separately in the log — they diagnose two different
+  failure modes: mean too high domain-wide → genuine CFL/timestep
+  issue, smaller `deltaT` actually helps; mean pinned near-zero while
+  max explodes at one localized spot → numerical instability (bad
+  cell / insufficient non-orthogonal correction), and shrinking
+  `deltaT` does **not** fix it — confirmed directly: dropping `deltaT`
+  `1e-5 → 1e-6` still blew up at the identical physical time. In this
+  case the cause was `fvSolution`'s `PIMPLE.nNonOrthogonalCorrectors`
+  being `0` on a mesh `checkMesh` had already flagged as ~12%
+  severely non-orthogonal (>70°) faces — too few correction passes
+  for that much non-orthogonality, injecting spurious velocity at the
+  worst cells. Fix: bump `nNonOrthogonalCorrectors` (tried `2`); if a
+  future case still blows up after that, suspect the mesh grading
+  itself next (sharp size-field jumps near curved boundaries), not the
+  timestep.
+- **🚨 [cylinder]** — When retesting a fix, change **one variable at a
+  time**!! After fixing an `nNonOrthogonalCorrectors`-related blow-up,
+  the retest also jumped `deltaT` 100× in the same run — so when it
+  hit a *different* Courant-number failure (mean elevated too, not
+  just max — a plain CFL issue this time, see `[cylinder]` log for the
+  full mean-vs-max diagnostic), there was no way to tell whether the
+  original fix actually worked or not. Bundling "does my fix work"
+  with "how far can I push this other setting" into one test destroys
+  attribution either way.
+- **[cylinder]** — Before diagnosing a process as "hung" (e.g. an MPI
+  deadlock after a partial crash), check actual process state
+  (`docker top`/`ps`) rather than just a long container uptime —
+  `docker ps` showing a container "Up 3 days" turned out to be an
+  unrelated idle interactive shell, not the run in question (which had
+  already exited and auto-removed itself via `docker run --rm`).
+- **[cylinder]** — `gmshToFoam`'s automatic `wall`/`empty` patch-type
+  detection (documented above as working via physical-surface name)
+  is **not consistently reliable** — it worked on one mesh revision
+  and silently fell back to generic `type patch;` for every patch
+  (including `empty`, which is fatal downstream) on another, with the
+  exact same physical-group names and no warning at conversion time.
+  **Don't trust it — verify `constant/polyMesh/boundary` after every
+  mesh regeneration**, and force the types explicitly rather than
+  relying on the heuristic: `changeDictionary` is deprecated (removed
+  from this project 2026-09-14) — use `foamDictionary -set` on
+  `constant/polyMesh/boundary` instead (see `cylinder/openFoam/
+  mesh.sh` for the pattern: `gmshToFoam` then `foamDictionary -set`).
+- **[cylinder]** — `foamPostProcess -func <name>` needs an explicit
+  `-solver <name>` flag when the function object (e.g. `forces`/
+  `forceCoeffs`) looks up solver fields (`U`, `p`) — without it, the
+  mesh and time directory load fine but the fields are never
+  registered, giving a confusing `Could not find U, p` even when the
+  files genuinely exist on disk.
+- **[cylinder]** — For a pseudo-2D single-layer extrusion, always add
+  `recombine=True` to `gmsh.model.geo.extrude(...)` (as `cavity`'s
+  script always did) — without it, gmsh tetrahedralizes/subdivides the
+  layer instead of producing clean prisms, which measurably worsens
+  mesh non-orthogonality/skewness for no benefit on a geometry this
+  simple.
+- **[cylinder]** — gmsh's own `"N nodes M elements"` summary bundles
+  2D surface/boundary elements with 3D cells — not a usable proxy for
+  OpenFOAM's actual cell count, which can be anywhere from ~0.33x to
+  ~0.95x of that total depending on resolution. Check `checkMesh`'s
+  `cells:` line instead when targeting a specific cell count, and
+  expect to iterate empirically rather than trust `1/size²` scaling
+  once a background sizing field with a fixed transition distance is
+  involved.
 - **[cavity]** — `internalField` in a field file (`U`, `p`, ...) is
   per-*cell*, in the mesh's own internal numbering — not a
   reshape-able `i,j` grid, even on a structured hex mesh. For a profile
