@@ -12,17 +12,14 @@ thickness = 0.1 * D  # thin single-layer extrusion for OpenFOAM's pseudo-2D
 # convention (see cavity/mesh/mesh.py) -- not physically meaningful, just
 # gives OpenFOAM the 3D mesh it requires even for a 2D problem.
 
-# Deliberately coarse for now -- the previous per-point sizing (mesh_size_far
-# at every far point, mesh_size_cyl right at the cylinder, nothing in
-# between) jumped straight from 0.01 to 0.001 with no graded transition,
-# which checkMesh flagged as ~12% severely non-orthogonal (>70 deg) faces
-# and which correlated with a Courant-number blow-up during solving (see
-# cylinder/log.md, 2026-09-10). Below, a Distance+Threshold field grades
-# the size smoothly instead of jumping. These values aren't meant to give
-# an accurate solution -- just a mesh coarse/well-behaved enough to run to
-# completion without blowing up; refine later once that's confirmed.
-size_far = 0.0097  # target element size far from the cylinder
-size_cyl = 0.00194  # target element size right at the cylinder surface
+# Re=20 (DFG 2D-1) mesh sizing -- Distance+Threshold field grades the size
+# smoothly from size_cyl at the cylinder surface out to size_far beyond
+# dist_max, instead of the old sharp per-point jump that caused a Courant-
+# number blow-up (see cylinder/log.md, 2026-09-10). These values were
+# empirically tuned (see log.md's mesh-sizing-iteration entry) to land at
+# ~62373 cells, the mesh the original 2D-1 steady run converged on.
+size_far = 0.011  # target element size far from the cylinder
+size_cyl = 0.0022  # target element size right at the cylinder surface
 dist_min = D  # distance from the cylinder surface where size_cyl still applies
 dist_max = 3 * D  # distance beyond which size_far fully applies (linear
 # grading from size_cyl to size_far between dist_min and dist_max)
