@@ -8,33 +8,20 @@
 FoamFile
 {
     format      ascii;
-    class       volVectorField;
-    location    "0";
-    object      U;
+    class       dictionary;
+    location    "system";
+    object      decomposeParDict;
 }
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
-dimensions      [velocity];
+numberOfSubdomains 8;
 
-internalField   uniform (0 0 0);
+method          simple;
 
-boundaryField
+simpleCoeffs
 {
-    lid
-    {
-        type            fixedValue;
-        value           uniform (10 0 0);
-    }
-
-    wall
-    {
-        type            noSlip;
-    }
-
-    empty
-    {
-        type            empty;
-    }
+    n           (4 2 1);
+    delta       0.001;
 }
 
 // ************************************************************************* //

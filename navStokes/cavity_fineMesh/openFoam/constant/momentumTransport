@@ -8,33 +8,20 @@
 FoamFile
 {
     format      ascii;
-    class       volVectorField;
-    location    "0";
-    object      U;
+    class       dictionary;
+    location    "constant";
+    object      momentumTransport;
 }
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
-dimensions      [velocity];
+simulationType  laminar;
 
-internalField   uniform (0 0 0);
-
-boundaryField
+RAS
 {
-    lid
-    {
-        type            fixedValue;
-        value           uniform (10 0 0);
-    }
+    model           kEpsilon;
 
-    wall
-    {
-        type            noSlip;
-    }
+    turbulence      on;
 
-    empty
-    {
-        type            empty;
-    }
 }
 
 // ************************************************************************* //

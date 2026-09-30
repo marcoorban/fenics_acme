@@ -8,27 +8,26 @@
 FoamFile
 {
     format      ascii;
-    class       volVectorField;
+    class       volScalarField;
     location    "0";
-    object      U;
+    object      p;
 }
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
-dimensions      [velocity];
+dimensions      [kinematicPressure];
 
-internalField   uniform (0 0 0);
+internalField   uniform 0;
 
 boundaryField
 {
     lid
     {
-        type            fixedValue;
-        value           uniform (10 0 0);
+        type            zeroGradient;
     }
 
     wall
     {
-        type            noSlip;
+        type            zeroGradient;
     }
 
     empty

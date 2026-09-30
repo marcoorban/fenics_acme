@@ -237,3 +237,8 @@ navStokes/**/openFoam/**/*.pvd
 # "p" file, isn't caught by *.dat).
 navStokes/**/openFoam-results/*/[0-9]*/
 navStokes/**/openFoam-results/*/postProcessing/
+
+/**/results
+/**/*.xy
+/**/*.avi
+octave-workspace
