@@ -2,7 +2,12 @@
 
 _Started: 2026-09-10_
 
-## Action Items
+This case is solved two different ways, documented separately below: **FVM** (OpenFOAM, the original/primary
+approach, `openFoam/`) and **FEM** (FEniCSx/dolfinx, added `2026-09-30` as a cross-check, `fem/dokken/`).
+
+## FVM (OpenFOAM)
+
+### Action Items
 
 - [x] **✅ 2026-09-14 — DFG 2D-3 (Re=100, time-ramped inlet) run, analyzed, matches the published benchmark
       closely.** Same case/mesh as `2D-2`, `0/U`'s inlet BC extended with a `sin(pi*t/8)` time factor
@@ -37,7 +42,7 @@ _Started: 2026-09-10_
       patch types via `foamDictionary -set`. Always run mesh conversion through `mesh.sh` from now on, not
       manual `gmshToFoam` calls.
 
-## Objective
+### Objective
 
 OpenFOAM case for classic 2D flow past a cylinder — the DFG 2D-1 (Schäfer–Turek) benchmark geometry: channel
 `2.2 x 0.41`, cylinder diameter `D=0.1` at `(0.2, 0.2)`, asymmetric gaps to the walls (`0.15` below, `0.16`
@@ -46,7 +51,7 @@ Python API, unstructured triangles refined near the cylinder, thin single-layer 
 pseudo-2D convention, same pattern as `cavity/mesh/mesh.py`), converted via `gmshToFoam`. Run with `foamRun
 -solver incompressibleFluid`, `simulationType laminar`.
 
-## Key decisions
+### Key decisions
 
 - **2026-09-10** — `constant/physicalProperties`'s `nu` was `1e-2` (stale, copied from `cavity`). Updated to
   `1e-3`. Why: for a parabolic profile the Reynolds number convention uses the *mean* velocity, not the
@@ -68,7 +73,7 @@ pseudo-2D convention, same pattern as `cavity/mesh/mesh.py`), converted via `gms
   structured grid impractical. Physical groups: `inlet`/`outlet`/`wall`(top+bottom)/`cylinder`/`empty`
   (front-back caps)/`domain`, matching `cavity`'s `lid`/`wall`/`empty`/`domain` naming convention.
 
-## Learnings (technical gotchas worth not re-deriving)
+### Learnings (technical gotchas worth not re-deriving)
 
 - **🚨 2026-09-14 — `reconstructPar -latestTime` only reconstructs the single latest time, and
   `foamPostProcess ... -latestTime` (run in serial, against the reconstructed case) can only see whatever
@@ -261,8 +266,96 @@ pseudo-2D convention, same pattern as `cavity/mesh/mesh.py`), converted via `gms
   when the code string's hash changes. Cheap way to keep one flow-condition parameter (`Um`) easily
   sweepable without a separate compiled library.
 
-## References
+### References
 
 - Schäfer, M., Turek, S. (1996), *Benchmark Computations of Laminar Flow Around a Cylinder*, in: Hirschel
   E.H. (eds) Flow Simulation with High-Performance Computers II. Notes on Numerical Fluid Mechanics, vol 52.
   Vieweg+Teubner Verlag. (DFG 2D-1/2-2/2-3 benchmark suite — this case targets 2D-1, `Re=20`, steady.)
+
+## FEM (FEniCSx / dolfinx)
+
+### Objective
+
+FEM cross-check of the DFG 2D-3 case (`Re=100`, time-ramped inlet) using dolfinx/FEniCSx instead of
+OpenFOAM's finite-volume solver — same benchmark geometry and boundary conditions, solved with an
+incremental pressure-correction (fractional-step) scheme on a genuinely 2D mesh (not OpenFOAM's pseudo-2D
+single-layer extrusion). Lives in `fem/dokken/`; the mesh is derived from the same gmsh geometry as the
+OpenFOAM case's `mesh/mesh.py`.
+
+### Learnings
+
+- **2026-09-30 — FEM `2D-3` results validated against the DFG benchmark reference, confirming the mesh/BC
+  fixes above produced physically correct results, not just a run that avoids crashing.** Also added a
+  `results/coefficients.csv` export (`t_u,C_D,C_L,t_p,p_diff` columns) since `navStokes.py` previously held
+  these in memory and discarded them at exit without ever saving them. From that csv: `Cd` max `2.92` vs.
+  reference `~2.9483` (~1% off), `Cl` range `[-0.475, 0.467]` vs. reference `~0.4651` (~1% off) — matching the
+  `9a`-reference values already cited in the FVM `2D-3` entry (`results.csv` row 7) to within ~1%, same
+  benchmark quantities. Peak pressure difference (`p_diff`, front-rear stagnation probes) over the whole run:
+  `2.326`, occurring during the forcing pulse near the `Cd`/`Cl` peaks (~`t=4s`). Separately, the actual DFG
+  2D-3-*defined* `delta_p` quantity — evaluated at the last time step `t=8s`, not the peak, per the same
+  convention used on the FVM side (see `results.csv` row 7: 2D-3 isn't periodic, so `delta_p(t=8)` checks how
+  close the decaying flow gets back to equilibrium rather than sampling mid-oscillation) — is `-0.111` here,
+  close to the FVM run's `-0.131359` at the same `t=8s` (same sign, same order of magnitude, ~15% apart) — a
+  reasonable FEM/FVM cross-check on top of the benchmark comparison itself.
+
+- **2026-09-30 — FEM `2D-3` run is finally stable end-to-end (12800/12800 steps, no blow-up, 1m51s wall time)
+  after three separate, compounding fixes to `fem/dokken/mesh.py`.** (1) Coarsened the cylinder-surface and
+  far-field sizing to the dokken tutorial's own scale (`size_cyl=0.015`, `size_far=0.08`, up from
+  `0.0022`/`0.011` inherited from the Re=20 OpenFOAM study) to fix the Courant-number blow-up documented in
+  the entry below. (2) That alone wasn't enough — the coarsened *triangular* mesh still blew up, while the
+  unmodified tutorial script (`navstokes_original.py`, its own quad mesh, `dt=1/1600` unchanged) ran
+  perfectly, isolating element family as a second real factor; switched to quadrilaterals (`Mesh.Algorithm=8`,
+  `RecombinationAlgorithm=2`, `RecombineAll=1`, `setRecombine(2, surface)` — same settings the tutorial uses —
+  layered on top of the existing Distance+Threshold grading, which recombination doesn't undo). (3)
+  Investigating the mesh after switching to quads surfaced a third, unrelated bug present since this file's
+  *first* commit: `addPhysicalGroup(1, [cylinderLoop], 4, name="cylinder")` passed a curve-**loop** tag, not
+  the four arc curve tags — loops aren't valid dim=1 physical-group members, so this silently produced an
+  **empty** group (`ft.find(4)` → 0 facets). The cylinder's no-slip wall BC had therefore never actually been
+  applied in any FEM run of this script — the hole in the domain was real geometry, but its boundary was an
+  unconstrained do-nothing boundary, not a wall — plausibly the actual root cause of the persistent blow-up
+  all along, independent of Courant number. Fixed by passing `[arcRightTop, arcTopLeft, arcLeftBottom,
+  arcBottomRight]` instead (same pattern already used correctly for `wall`). Also fixed dead-code confusion:
+  `generate(3)` → `generate(2)` (the extrude block is commented out, so there were never any 3D entities to
+  generate). Separately, `navStokes.py`'s per-step `vtx_u.write(t)`/`vtx_p.write(t)` produced a 14G `results/`
+  directory for one 8s run — changed to write only every 250 steps (`or i == num_steps - 1` to guarantee the
+  final state is always included), dropping the same run to 56M.
+
+- **2026-09-30 — coarsened `fem/dokken/mesh.py`'s cylinder-surface sizing back to the dokken tutorial's own
+  resolution after a Courant-number blow-up (`e+41` velocities by the last timestep).** The mesh being read by
+  `navStokes.py` had inherited the Re=20 OpenFOAM `2D-1` sizing study's values (`size_cyl=0.0022`), meshing to
+  `h_min≈0.00163` — never chosen for this Re=100 FEM run's `dt=1/1600` (copied unchanged from the tutorial,
+  which was tuned against its own coarser mesh). Diagnosed by loading the mesh directly in `fenics-env` and
+  reading `mesh.h(...)` rather than guessing: at `h_min=0.00163`, `Courant = u*dt/h_min` is already `0.38` at
+  the mean inlet velocity (`Ubar=1.0`), and crosses `1.0` well within plausible near-cylinder velocities —
+  `~3` (typical ~2x free-stream acceleration around a cylinder in cross-flow) and `~4.5` (conservative
+  allowance for shedding-transient peaks on top of that acceleration at `Re=100`) — which is almost certainly
+  what blew up the explicit (Adams-Bashforth-extrapolated) convection term. Set
+  `size_cyl=0.015`/`size_far=0.017` (matching the tutorial's own ~`D/7`-`D/6` cylinder-surface resolution for
+  `D=0.1`); re-measured mesh gives `h_min≈0.0116`, dropping the same velocity range to `C=0.05-0.24` —
+  comfortably stable. Cell count fell `62449 → 7627` (~8x), which should cut the ~1hr runtime substantially
+  too. `dt=1/1600` left unchanged.
+
+- **2026-09-30 — a FEM cross-check of `2D-3` was added: `cylinder/fem/dokken/navStokes.py`, a dolfinx
+  (FEniCSx) incremental-pressure-correction Navier-Stokes solver, using a 2D mesh derived from the same
+  OpenFOAM geometry.** Confirmed it targets the exact same case and `Re` as the OpenFOAM `2D-3` run: inlet
+  profile `4*1.5*sin(t*pi/8)*y*(0.41-y)/0.41^2` (`Um=1.5`, `H=0.41`, same `sin(pi*t/8)` ramp), `mu=0.001`/
+  `rho=1` (`nu=0.001`, matching `constant/physicalProperties`), `D=0.1` (from the `2/0.1` factor in the
+  drag/lift integrals), `T=8.0s` final time (`dt=1/1600` here vs. OpenFOAM's `deltaT=1e-4`). Reynolds number:
+  `Ubar=(2/3)*Um=(2/3)*1.5=1.0`, `Re=Ubar*D/nu=1.0*0.1/0.001=100` — same `Re=100` as the OpenFOAM `2D-2`/
+  `2D-3` cases (see the FVM section's `results.csv`/`2026-09-14` entries above). Also validates against
+  FEATFLOW's `bdforces_lv4`/`pointvalues_lv4` reference data files — the same underlying source the
+  `9a`-reference values (`Cd~2.9483`, `Cl~0.4651`) compared against in the FVM `2D-3` plots ultimately trace
+  back to. Facet markers follow a `{"inlet": 1, "outlet": 2, "walls": 3, "cylinder": 4}` convention (gmsh
+  physical groups on the 2D mesh, not the `inlet`/`outlet`/`wall`/`cylinder`/`empty` names used on the
+  OpenFOAM side — no `empty` group needed here since this mesh is genuinely 2D, not OpenFOAM's pseudo-2D
+  single-layer extrusion). Results written via `VTXWriter` to `results/dfg2D-3-u.bp`/`dfg2D-3-p.bp`.
+
+### References
+
+- Schäfer, M., Turek, S. (1996), *Benchmark Computations of Laminar Flow Around a Cylinder*, in: Hirschel
+  E.H. (eds) Flow Simulation with High-Performance Computers II. Notes on Numerical Fluid Mechanics, vol 52.
+  Vieweg+Teubner Verlag. (Same DFG 2D-1/2-2/2-3 benchmark suite as the FVM section — this script targets
+  2D-3, `Re=100`, time-ramped inlet.)
+- FEATFLOW `bdforces_lv4`/`pointvalues_lv4` reference data files (loaded directly in `navStokes.py` for the
+  `Cd`/`Cl`/`delta_p` comparison plots) — the original source of the DFG benchmark's published reference
+  values.

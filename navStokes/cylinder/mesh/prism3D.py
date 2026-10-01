@@ -98,24 +98,27 @@ gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
 #   out[0] = far cap, out[1] = volume,
 #   out[2..] = lateral surfaces in curve-loop order -- outer loop first
 #   (bottom, outlet, top, inlet), then the cylinder loop (its 4 arcs).
-# out = gmsh.model.geo.extrude(
-#    [(2, surface)], 0, 0, thickness, numElements=[1], recombine=True
-# )
-# farCap, volume = out[0], out[1]
-# bottomWall, outletFace, topWall, inletFace = out[2], out[3], out[4], out[5]
-# cylArcs = [out[6][1], out[7][1], out[8][1], out[9][1]]
+out = gmsh.model.geo.extrude(
+    [(2, surface)], 0, 0, thickness, numElements=[1], recombine=True
+)
+farCap, volume = out[0], out[1]
+bottomWall, outletFace, topWall, inletFace = out[2], out[3], out[4], out[5]
+cylArcs = [out[6][1], out[7][1], out[8][1], out[9][1]]
 
-# gmsh.model.geo.synchronize()
+gmsh.model.geo.synchronize()
 
-gmsh.model.addPhysicalGroup(1, [inlet], 1, name="inlet")
-gmsh.model.addPhysicalGroup(1, [outlet], 2, name="outlet")
-gmsh.model.addPhysicalGroup(1, [top, bottom], 3, name="wall")
-gmsh.model.addPhysicalGroup(1, [cylinderLoop], 4, name="cylinder")
-gmsh.model.addPhysicalGroup(2, [surface], 5, name="domain")
+gmsh.model.addPhysicalGroup(2, [inletFace[1]], name="inlet")
+gmsh.model.addPhysicalGroup(2, [outletFace[1]], name="outlet")
+gmsh.model.addPhysicalGroup(2, [topWall[1], bottomWall[1]], name="wall")
+gmsh.model.addPhysicalGroup(2, cylArcs, name="cylinder")
+gmsh.model.addPhysicalGroup(2, [surface, farCap[1]], name="empty")
+gmsh.model.addPhysicalGroup(3, [volume[1]], name="domain")
 
+# Filename doubles as this mesh's id in cylinder/mesh/meshes_summary.csv --
+# update both together if size_cyl/size_far/the cell count change.
 gmsh.model.mesh.generate(3)
-# gmsh.option.setNumber("Mesh.MshFileVersion", 2.2)
-gmsh.write("cylinder.msh")
+gmsh.option.setNumber("Mesh.MshFileVersion", 2.2)
+gmsh.write("prism3D_62373cells.msh")
 if "-nopopup" not in sys.argv:
     gmsh.fltk.run()
 gmsh.finalize()

@@ -1,0 +1,27 @@
+name: fenics-env
+channels:
+  - conda-forge
+dependencies:
+  # dolfinx 0.11.0 only has conda-forge builds for py311/py312 -- pinning
+  # here avoids solving into py313/py314, which is what silently produced
+  # the broken legacy-FEniCS env in `environment.yml` (no fenics-dolfinx
+  # build exists for those Python versions).
+  - python=3.12
+  # Pulls the matching set automatically: fenics-basix 0.11.*,
+  # fenics-ffcx 0.11.*, fenics-ufl 2026.1.*, fenics-libdolfinx 0.11.0,
+  # mpi4py, petsc/petsc4py, slepc/slepc4py -- verified via
+  # `conda search -c conda-forge fenics-dolfinx=0.11.0 --info`.
+  - fenics-dolfinx=0.11.0
+  - mpich
+  # dolfinx.io.gmsh.read_from_msh needs the real gmsh Python module to
+  # parse .msh files (e.g. cavity-2D.msh) -- not imported directly by
+  # navStokes.py, but required transitively. On conda-forge "gmsh" is
+  # just the binary/shared library; "python-gmsh" is the separate
+  # package that actually provides the importable `gmsh` module
+  # (confirmed: installing only "gmsh" leaves `import gmsh` failing
+  # with ModuleNotFoundError even though the package is present).
+  - python-gmsh
+  # Imported directly by navStokes.py.
+  - matplotlib
+  - tqdm
+  - gmsh

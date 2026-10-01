@@ -211,3 +211,19 @@ future case's validation plots, e.g. cylinder drag/lift/Strouhal comparisons):
   bind mounts share the host's user namespace, so a container run without
   `--user` writes root-owned output back to the host; `HOME=/tmp` is needed
   alongside it because the host UID has no entry in the container's `/etc/passwd`.
+
+## #fem
+
+- **[cylinder]** — **MPI parallelism for FEniCSx/dolfinx scripts is set at the launcher,
+  not in the script.** dolfinx scripts (e.g. `cylinder/fem/dokken/navStokes.py`) import
+  `mpi4py.MPI` and pass `MPI.COMM_WORLD` into mesh reads/solves — that communicator adapts
+  to however many ranks it's given, so there's no `n_cores` variable to edit anywhere in
+  the script. Core count is chosen at invocation instead: `mpirun -np N python3 script.py`
+  (or `mpiexec -n N python3 script.py`) — same pattern as OpenFOAM's `mpirun -np 16
+  foamRun -parallel`. dolfinx then partitions the mesh across the N ranks automatically;
+  no code change needed to go from 1 core to N. Two conventions that go with this, both
+  already used in the dokken script: (1) guard any print/plot/file-write with `if
+  mesh.comm.rank == 0:` — otherwise every rank does it redundantly, or N ranks race to
+  write the same file; (2) to combine a per-rank scalar (e.g. a drag/lift integral
+  computed over just that rank's mesh partition) into one value, use
+  `mesh.comm.gather(value, root=0)` and sum/process the resulting list on rank 0 only.
