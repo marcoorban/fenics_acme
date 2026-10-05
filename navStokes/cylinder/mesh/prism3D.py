@@ -114,11 +114,23 @@ gmsh.model.addPhysicalGroup(2, cylArcs, name="cylinder")
 gmsh.model.addPhysicalGroup(2, [surface, farCap[1]], name="empty")
 gmsh.model.addPhysicalGroup(3, [volume[1]], name="domain")
 
-# Filename doubles as this mesh's id in cylinder/mesh/meshes_summary.csv --
-# update both together if size_cyl/size_far/the cell count change.
 gmsh.model.mesh.generate(3)
 gmsh.option.setNumber("Mesh.MshFileVersion", 2.2)
-gmsh.write("prism3D_62373cells.msh")
+
+# Filename is parametrized by the actual generated cell count, not
+# hardcoded -- "cells" here means the 3D (prism) elements specifically, the
+# same OpenFOAM-sense count checkMesh reports (not gmsh's total element
+# count, which also bundles in the 2D cap/boundary elements -- see
+# cylinder/log.md's warning about that distinction). Read from gmsh's own
+# result, not size_cyl/size_far, which only predict it approximately, so it
+# can't drift stale if the sizing parameters above are retuned. This also
+# doubles as this mesh's id in cylinder/mesh/meshes_summary.csv -- re-run
+# that catalog's numbers if this changes.
+elem_types, elem_tags, _ = gmsh.model.mesh.getElements(dim=3)
+num_cells = sum(len(tags) for tags in elem_tags)
+meshFileName = f"prism3D_{num_cells}cells.msh"
+print(f"Generated {num_cells} cells -> writing {meshFileName}")
+gmsh.write(meshFileName)
 if "-nopopup" not in sys.argv:
     gmsh.fltk.run()
 gmsh.finalize()

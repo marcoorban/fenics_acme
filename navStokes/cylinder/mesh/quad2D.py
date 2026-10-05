@@ -146,10 +146,19 @@ gmsh.model.addPhysicalGroup(2, [surface], 5, name="domain")
 # generate(2), not generate(3) -- the extrude block above is commented out,
 # so there are no 3D entities; this mesh is genuinely 2D, matching the
 # "domain" physical group above (dim=2, the surface itself).
-# Filename doubles as this mesh's id in cylinder/mesh/meshes_summary.csv --
-# update both together if size_cyl/size_far/the cell count change.
 gmsh.model.mesh.generate(2)
-gmsh.write("quad2D_2504cells.msh")
+
+# Filename is parametrized by the actual generated cell count, not hardcoded
+# -- read from gmsh's own result (not size_cyl/size_far, which only predict
+# it approximately, see cylinder/log.md's mesh-sizing-iteration entry) so it
+# can't drift stale if the sizing parameters above are retuned. This also
+# doubles as this mesh's id in cylinder/mesh/meshes_summary.csv -- re-run
+# that catalog's numbers if this changes.
+elem_types, elem_tags, _ = gmsh.model.mesh.getElements(dim=2)
+num_cells = sum(len(tags) for tags in elem_tags)
+meshFileName = f"quad2D_{num_cells}cells.msh"
+print(f"Generated {num_cells} cells -> writing {meshFileName}")
+gmsh.write(meshFileName)
 if "-nopopup" not in sys.argv:
     gmsh.fltk.run()
 gmsh.finalize()
