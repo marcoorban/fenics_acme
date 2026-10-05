@@ -69,6 +69,14 @@ CASES = {
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
+    "-m",
+    "--mesh",
+    type=str,
+    default="quad2D_2504cells.msh",
+    help="Name of meshfile to be read, resolved against cylinder/mesh/ -- "
+    "see cylinder/mesh/meshes_summary.csv for what's available."
+)
+parser.add_argument(
     "-i",
     "--inletBC",
     type=int,
@@ -76,36 +84,20 @@ parser.add_argument(
     choices=sorted(CASES),
     help="; ".join(f"{k}. {v['name']}" for k, v in CASES.items()),
 )
-parser.add_argument(
-    "-m",
-    "--mesh",
-    type=str,
-    default="quad2D_2504cells.msh",
-    help="Mesh file to solve on -- see cylinder/mesh/meshes_summary.csv for "
-    "the catalog of available meshes and their properties. A bare filename "
-    "(e.g. 'prism3D_62373cells.msh') resolves against cylinder/mesh/; an "
-    "absolute or ./-relative path is used as-is. Results are kept in their "
-    "own per-mesh subfolder (named after the mesh's filename stem) so "
-    "different meshes don't overwrite each other's results.",
-)
 args = parser.parse_args()
 case = CASES[args.inletBC]
 Um = case["Um"]
 Ubar = (2 / 3) * Um  # mean velocity of a parabolic (Poiseuille) inlet profile
 
-# cylinder/ was reorganized 2026-10-01: meshes now live in a shared
-# cylinder/mesh/ (per-method mesh/results split), not alongside each
-# method's solver script.
+# Absolute path, not a bare relative filename (unlike the tutorial this is
+# based on) -- a relative "cylinder.msh" resolves against the *launch* cwd,
+# not this script's directory, and a stale duplicate mesh one level up
+# (`cylinder/fem/cylinder.msh`) got silently picked up that way once already.
+# cylinderDir climbs dokken -> fem -> cylinder (three .parent, not two --
+# "fem/mesh/" isn't a real directory, the meshes live in "cylinder/mesh/").
 cylinderDir = Path(__file__).parent.parent.parent
-
-# A bare filename resolves against cylinder/mesh/ (the common case: picking
-# between meshes that already live there, e.g. -m finemsh.msh); a path
-# containing a directory component (absolute, or explicitly "./foo.msh") is
-# used as-is instead, rather than silently resolving against the *launch*
-# cwd -- that exact relative-path ambiguity bit this script once already
-# (a stale duplicate mesh one level up got picked up silently).
-meshArg = Path(args.mesh)
-meshFile = meshArg if meshArg.parent != Path(".") else cylinderDir / "mesh" / meshArg
+fileName = args.mesh
+meshFile = cylinderDir / "mesh" / fileName
 meshData = gmsh.read_from_msh(meshFile, MPI.COMM_WORLD, rank=0, gdim=2)
 mesh = meshData.mesh
 assert meshData.facet_tags is not None
@@ -121,7 +113,7 @@ num_steps = int(T / dt)
 k = Constant(mesh, PETSc.ScalarType(dt))
 mu = Constant(mesh, PETSc.ScalarType(0.001))  # Dynamics viscosity
 rho = Constant(mesh, PETSc.ScalarType(1))
-D = 0.1  # cylinder diameter, matches cylinder/mesh/quad2D.py's D
+D = 0.1  # cylinder diameter, matches mesh.py's D
 
 # --- Boundary conditions --- #
 v_cg2 = element("Lagrange", mesh.basix_cell(), 2, shape=(mesh.geometry.dim,))

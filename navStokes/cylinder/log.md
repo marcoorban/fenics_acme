@@ -284,6 +284,56 @@ OpenFOAM case's `mesh/mesh.py`.
 
 ### Learnings
 
+- **2026-10-05 — built `femSolver.py`'s `Chorin.solve_weak` (Nitsche-enforced BCs + SUPG), and in the process
+  confirmed a real UFL limitation: a single scalar form can't mix `TestFunction`/`TrialFunction` objects from
+  two different, separately-created function spaces (`V` and `Q` here).** UFL numbers arguments by role only
+  (test=0, trial=1) regardless of space, so combining a `w`-based (velocity) term with a `q`-based (pressure)
+  term in one `F` raises `ValueError: Found different Arguments with same number and part` -- confirmed via
+  `dolfinx.fem.form(F)` directly, not just guessed. Doing that properly needs a true `MixedFunctionSpace`,
+  which neither `solve_strong` nor `Chorin` ever set up -- and is exactly why fractional-step methods
+  (Chorin/Goda) exist in the first place: each step only ever touches one space at a time, so this limitation
+  never bites them by construction. Net effect: `solve_weak` had to be split into Chorin's 3 steps immediately
+  (continuity only ever appears in step 2, same as `solve_strong`), not derived as one monolithic coupled form
+  first. Settled the convective-term linearization question alongside this: semi-implicit, transport velocity
+  `a = self.u_n` (same choice `solve_strong` already makes) for both `convection` and `SUPG`'s residual --
+  keeps step 1 linear in `u`, no Newton/Picard needed. Step 1's stress operator is `sigma_u(uu) =
+  2*nu*sym(grad(uu))` with no pressure term (feeds `ibp`/`consistency`/`SUPG`'s residual) since Chorin's step
+  1 never has pressure -- same restriction already applied in `solve_strong`. Also fixed several mechanical
+  bugs in the hand-written skeleton: `nabla(w)` isn't a real UFL function (`nabla_grad`), `dot()` between two
+  rank-2 tensors gives a rank-2 tensor not a scalar -- confirmed directly (`dot(grad(w),grad(u)).ufl_shape ==
+  (2,2)` vs. `inner(...).ufl_shape == ()`) -- so the convective/viscous contractions needed `inner()`,
+  `continuity`'s `dot(u)` (a unary call to a binary function) should have been `div(u)`, and the forcing term
+  had the same sign bug just fixed in `solve_strong` (`+<f,w>` instead of `-<f,w>` -- see the entry above this
+  one). Smoke-tested (5 steps, dt=0.01, Re=100): `u max=0.0355`/`p max=0.9325`, close to `solve_strong`'s
+  `0.0359`/`0.9312` on the same run -- expected, since Nitsche only enforces BCs approximately rather than
+  exactly. The one unvalidated parameter: Nitsche penalty `beta=10*vDegree**2`, a standard starting value, not
+  yet tuned against this problem.
+
+- **2026-10-05 — found (and fixed in `chorin.py`) a latent sign bug in the dokken tutorial's forcing term,
+  dormant there only because its `f` is zero.** `F1 += dot(f, v) * dx` is backwards: `F1` is built as a "move
+  everything to one side, residual = 0" expression, and `rhs(F1)` only recovers the correctly-signed `L(v) =
+  <f,v>` if `f` enters the residual as `-<f,v>`, matching the same sign logic already correctly applied to the
+  pressure/viscous terms (see the 2026-10-05 `lhs`/`rhs` entry above). Verified numerically, not just by sign-
+  counting on paper: solved a simple Poisson check (`-μΔu=f`, constant `f=1`, `u=0` on the boundary) once with
+  the `+f*v*dx` pattern and once with `-f*v*dx` -- `+forcing` gives `max=0.0, min=-0.07345` (wrong sign,
+  solution pulled negative by a *positive* load), `-forcing` gives `max=0.07345, min=0.0` (correct, matches
+  the textbook positive-bump solution for a positive load with zero Dirichlet BC). Fixed in
+  `fem/supg/chorin.py`'s `solve_strong` (`F1 -= dot(f, v) * dx`); not fixed upstream in
+  `fem/dokken/navStokes.py` since that script's `f` is always zero there, so it's harmless as shipped -- worth
+  remembering if that script is ever adapted to a nonzero body force, though.
+
+- **2026-10-05 — `TrialFunction`/`TestFunction` are disposable, per-step algebraic placeholders, not tied to
+  any particular physical field.** Worth writing down since it wasn't obvious while building
+  `fem/supg/chorin.py`: a `Function` (e.g. `u_s`, `u_n`, `u_`) holds actual DOF values, but `u =
+  TrialFunction(V)` holds none -- it's a symbol UFL uses to tell which terms in a weak-form expression are
+  linear in "the unknown" (→ assembled into the matrix, via `lhs(F)`) versus known data (→ the RHS vector, via
+  `rhs(F)`). The *same* `u` symbol gets reused across completely unrelated steps in both `dokken/navStokes.py`
+  and `chorin.py`'s `solve_strong` (step 1's tentative-velocity system and step 3's velocity-correction system
+  each declare/reuse `u` independently) with no state carried between them -- each `form(...)` call captures
+  whatever surrounds `u` *at that point* into its own independent matrix (`A1`, `A3`, ...). The real result
+  only exists once `solver.solve(b, some_function.x.petsc_vec)` writes numbers into an actual `Function` --
+  `u` itself never holds a value at any point.
+
 - **2026-09-30 — FEM `2D-3` results validated against the DFG benchmark reference, confirming the mesh/BC
   fixes above produced physically correct results, not just a run that avoids crashing.** Also added a
   `results/coefficients.csv` export (`t_u,C_D,C_L,t_p,p_diff` columns) since `navStokes.py` previously held
