@@ -1,0 +1,50 @@
+# Physics, discretization, and function-space configuration for the
+# dokken IPCS (fractional-step) Navier-Stokes solver (femSolver.py).
+# Mesh selection and the inlet-BC case selection stay command-line
+# arguments (argparser.py) -- this file is for the physical/numerical
+# parameters that previously lived hardcoded in femSolver.py.
+
+physics:
+  mu: 0.001   # dynamic viscosity
+  rho: 1.0    # density
+  D: 0.1      # cylinder diameter -- must match whichever mesh is selected
+  t0: 0.0     # initial time
+  fx: 0.0      # magnitude of constant forcing function; x-component
+  fy: 0.0      # magnitude of constant forcing function; y-component
+
+discretization:
+  dt: 0.000625  # 1/1600
+  function_spaces:
+    velocity:
+      family: Lagrange
+      degree: 2   # Q2/P2 -- paired with pressure's degree 1 for
+                  # inf-sup (Taylor-Hood) stability; do not make these equal
+    pressure:
+      family: Lagrange
+      degree: 1   # Q1/P1
+
+# DFG benchmark case definitions -- single source of truth for each case's
+# inlet peak velocity, whether it's time-ramped, and how long to run. Ubar
+# (used in the drag/lift normalization constant) is derived from Um in code
+# rather than duplicated here, so it can't drift out of sync with whichever
+# case is selected. T is case-dependent: case 1 only needs to run long
+# enough to reach steady state (OpenFOAM's residualControl converged it at
+# t~2.36s; 3.0s gives headroom), case 2 matches the OpenFOAM 2D-2
+# endTime=5s convention, case 3 needs the full 8s to capture the whole
+# ramp-up/ramp-down.
+cases:
+  1:
+    name: 2D-1_steady
+    Um: 0.3
+    ramped: false
+    T: 3.0
+  2:
+    name: 2D-2_unsteady
+    Um: 1.5
+    ramped: false
+    T: 5.0
+  3:
+    name: 2D-3_unsteady_ramp
+    Um: 1.5
+    ramped: true
+    T: 8.0
