@@ -1,17 +1,59 @@
-class NavStokesFEMSolver:
+import numpy as np
+import tqdm.autonotebook
+from dolfinx.fem import (
+    Constant,
+    Function,
+    dirichletbc,
+    extract_function_spaces,
+    form,
+    locate_dofs_topological,
+)
+from dolfinx.fem.petsc import (
+    apply_lifting,
+    assemble_matrix,
+    assemble_vector,
+    create_matrix,
+    create_vector,
+    set_bc,
+)
+from petsc4py import PETSc
+from ufl import (
+    CellDiameter,
+    FacetNormal,
+    Measure,
+    TestFunction,
+    TrialFunction,
+    div,
+    dot,
+    dx,
+    grad,
+    inner,
+    lhs,
+    nabla_grad,
+    outer,
+    rhs,
+    sqrt,
+    sym,
+)
 
+from boundaryConditions import SinuPoiseuilleFlow
+
+
+class NavStokesFEMSolver:
     # Same {name: tag} convention as fem/dokken/navStokes.py and mesh/*.py.
     BOUNDARY_MAPPING = {"inlet": 1, "outlet": 2, "walls": 3, "cylinder": 4}
 
-    def __init__(self, V, Q, ft):
+    def __init__(self, V, Q, ft, vDegree, writer):
         self.V = V
         self.Q = Q
         self.u = TrialFunction(V)
         self.w = TestFunction(V)
         self.p = TrialFunction(Q)
         self.q = TestFunction(Q)
-        self.mesh  = V.mesh
+        self.mesh = V.mesh
         self.ft = ft
+        self.vDegree = vDegree
+        self.writer = writer
 
     def set_physical_parameters(self, config):
         self.muVal = config["physics"]["mu"]
@@ -25,6 +67,7 @@ class NavStokesFEMSolver:
         self.fx = config["physics"]["fx"]
         self.fy = config["physics"]["fy"]
         self.f = Constant(self.mesh, PETSc.ScalarType((self.fx, self.fy)))
+        self.fps = config["results"]["fps"]
 
     def compute_Re(self, Um):
         """Reynolds number for this solver's current nu/D, given the inlet
@@ -36,13 +79,12 @@ class NavStokesFEMSolver:
 
 
 class Chorin(NavStokesFEMSolver):
-
-    def __init__(self, V, Q, ft):
-        super().__init__(V, Q, ft)
-        self.u_n = Function(V, name="u_now") # u^n; current, known velocity
-        self.u_ = Function(V, name="u_next") # u^(n+1); next velocity (next time step)
-        self.u_s = Function(V, name="u_aux") # Auxiliary / tentative velocity
-        self.p_ = Function(Q, name="p_next") # p^(n+1); next pressure field
+    def __init__(self, V, Q, ft, vDegree, writer):
+        super().__init__(V, Q, ft, vDegree, writer)
+        self.u_n = Function(V, name="u_now")  # u^n; current, known velocity
+        self.u_ = Function(V, name="u_next")  # u^(n+1); next velocity (next time step)
+        self.u_s = Function(V, name="u_aux")  # Auxiliary / tentative velocity
+        self.p_ = Function(Q, name="p_next")  # p^(n+1); next pressure field
 
     def solve_strong(self, dt, T, Re):
         """Solve from t=0 to T with strongly-enforced Dirichlet BCs, dokken's
@@ -55,7 +97,14 @@ class Chorin(NavStokesFEMSolver):
         Returns (u_, p_).
         """
         V, Q, mesh, ft, w, u, p, q = (
-            self.V, self.Q, self.mesh, self.ft, self.w, self.u, self.p, self.q
+            self.V,
+            self.Q,
+            self.mesh,
+            self.ft,
+            self.w,
+            self.u,
+            self.p,
+            self.q,
         )
 
         Um = 1.5
@@ -71,17 +120,24 @@ class Chorin(NavStokesFEMSolver):
 
         # --- Strong boundary conditions (dokken's pattern) --- #
         u_inlet = Function(V)
-        inlet_velocity = self._InletVelocity(t, Um)
+        inlet_velocity = SinuPoiseuilleFlow(t=t, Um=Um)
         u_inlet.interpolate(inlet_velocity)
         bcu_inflow = dirichletbc(
-            u_inlet, locate_dofs_topological(V, fdim, ft.find(self.BOUNDARY_MAPPING["inlet"]))
+            u_inlet,
+            locate_dofs_topological(V, fdim, ft.find(self.BOUNDARY_MAPPING["inlet"])),
         )
         u_nonslip = np.array((0,) * mesh.geometry.dim, dtype=PETSc.ScalarType)
         bcu_walls = dirichletbc(
-            u_nonslip, locate_dofs_topological(V, fdim, ft.find(self.BOUNDARY_MAPPING["walls"])), V
+            u_nonslip,
+            locate_dofs_topological(V, fdim, ft.find(self.BOUNDARY_MAPPING["walls"])),
+            V,
         )
         bcu_cylinder = dirichletbc(
-            u_nonslip, locate_dofs_topological(V, fdim, ft.find(self.BOUNDARY_MAPPING["cylinder"])), V
+            u_nonslip,
+            locate_dofs_topological(
+                V, fdim, ft.find(self.BOUNDARY_MAPPING["cylinder"])
+            ),
+            V,
         )
         bcu = [bcu_inflow, bcu_walls, bcu_cylinder]
         bcp_outlet = dirichletbc(
@@ -120,7 +176,9 @@ class Chorin(NavStokesFEMSolver):
         # directly (Goda's step 3 would use a pressure-correction phi
         # instead) --- #
         a3 = form(self.rho * dot(u, w) * dx)
-        L3 = form(self.rho * dot(self.u_s, w) * dx - k * dot(nabla_grad(self.p_), w) * dx)
+        L3 = form(
+            self.rho * dot(self.u_s, w) * dx - k * dot(nabla_grad(self.p_), w) * dx
+        )
         A3 = assemble_matrix(a3)
         A3.assemble()
         b3 = create_vector(extract_function_spaces(L3))
@@ -155,7 +213,9 @@ class Chorin(NavStokesFEMSolver):
                 loc.set(0)
             assemble_vector(b1, L1)
             apply_lifting(b1, [a1], [bcu])
-            b1.ghostUpdate(addv=PETSc.InsertMode.ADD_VALUES, mode=PETSc.ScatterMode.REVERSE)
+            b1.ghostUpdate(
+                addv=PETSc.InsertMode.ADD_VALUES, mode=PETSc.ScatterMode.REVERSE
+            )
             set_bc(b1, bcu)
             solver1.solve(b1, self.u_s.x.petsc_vec)
             self.u_s.x.scatter_forward()
@@ -165,7 +225,9 @@ class Chorin(NavStokesFEMSolver):
                 loc.set(0)
             assemble_vector(b2, L2)
             apply_lifting(b2, [a2], [bcp])
-            b2.ghostUpdate(addv=PETSc.InsertMode.ADD_VALUES, mode=PETSc.ScatterMode.REVERSE)
+            b2.ghostUpdate(
+                addv=PETSc.InsertMode.ADD_VALUES, mode=PETSc.ScatterMode.REVERSE
+            )
             set_bc(b2, bcp)
             solver2.solve(b2, self.p_.x.petsc_vec)
             self.p_.x.scatter_forward()
@@ -174,11 +236,16 @@ class Chorin(NavStokesFEMSolver):
             with b3.localForm() as loc:
                 loc.set(0)
             assemble_vector(b3, L3)
-            b3.ghostUpdate(addv=PETSc.InsertMode.ADD_VALUES, mode=PETSc.ScatterMode.REVERSE)
+            b3.ghostUpdate(
+                addv=PETSc.InsertMode.ADD_VALUES, mode=PETSc.ScatterMode.REVERSE
+            )
             solver3.solve(b3, self.u_.x.petsc_vec)
             self.u_.x.scatter_forward()
 
-            with self.u_.x.petsc_vec.localForm() as loc_, self.u_n.x.petsc_vec.localForm() as loc_n:
+            with (
+                self.u_.x.petsc_vec.localForm() as loc_,
+                self.u_n.x.petsc_vec.localForm() as loc_n,
+            ):
                 loc_.copy(loc_n)
 
         solver1.destroy()
@@ -193,7 +260,7 @@ class Chorin(NavStokesFEMSolver):
 
         return self.u_, self.p_
 
-    def solve_weak(self, dt, T):
+    def solve_weak(self, dt, T, inlet_velocity):
         """Solve from t=0 to T with Nitsche-enforced (weak) velocity BCs and
         SUPG stabilization, using Chorin's splitting -- same 3 steps as
         solve_strong, except step 1's tentative-velocity system replaces the
@@ -211,16 +278,22 @@ class Chorin(NavStokesFEMSolver):
         first, same as solve_strong. Returns (u_, p_).
         """
         V, Q, mesh, ft, w, u, p, q = (
-            self.V, self.Q, self.mesh, self.ft, self.w, self.u, self.p, self.q
+            self.V,
+            self.Q,
+            self.mesh,
+            self.ft,
+            self.w,
+            self.u,
+            self.p,
+            self.q,
         )
 
-        Um = 1.5
+        Um = inlet_velocity.Um
         Ubar = (2 / 3) * Um
         Re = self.compute_Re(Um)
         self.nuVal = Ubar * self.D / Re
         self.nu = Constant(mesh, PETSc.ScalarType(self.nuVal))
         self.mu = Constant(mesh, PETSc.ScalarType(self.nuVal * self.rhoVal))
-
 
         t = 0.0
         num_steps = int(T / dt)
@@ -233,7 +306,6 @@ class Chorin(NavStokesFEMSolver):
         # Nitsche target `g` (consistency/penalty terms below) instead of a
         # dirichletbc. --- #
         u_inlet = Function(V)
-        inlet_velocity = self._InletVelocity(t, Um)
         u_inlet.interpolate(inlet_velocity)
         zero = Constant(mesh, PETSc.ScalarType((0, 0)))
         dirichlet_boundaries = [
@@ -256,7 +328,9 @@ class Chorin(NavStokesFEMSolver):
 
         n = FacetNormal(mesh)
         h = CellDiameter(mesh)
-        beta = Constant(mesh, PETSc.ScalarType(10 * vDegree**2))  # Nitsche penalty; tune if unstable
+        beta = Constant(
+            mesh, PETSc.ScalarType(10 * self.vDegree**2)
+        )  # Nitsche penalty; tune if unstable
 
         unsteady = self.rho / k * dot(u - self.u_n, w) * dx
         convection = self.rho * inner(nabla_grad(w), outer(a, u)) * dx
@@ -272,11 +346,29 @@ class Chorin(NavStokesFEMSolver):
             consistency += -dot(dot(sigma_u(w), n), u - g) * ds_tag
             penalty += (beta / h) * dot(u - g, w) * ds_tag
 
-        R1 = self.rho / k * (u - self.u_n) + self.rho * dot(a, nabla_grad(u)) - div(sigma_u(u)) - self.f
-        tau = 1 / sqrt((2 / dt) ** 2 + (2 * sqrt(dot(a, a)) / h) ** 2 + (4 * self.nuVal / h**2) ** 2)
+        R1 = (
+            self.rho / k * (u - self.u_n)
+            + self.rho * dot(a, nabla_grad(u))
+            - div(sigma_u(u))
+            - self.f
+        )
+        tau = 1 / sqrt(
+            (2 / dt) ** 2
+            + (2 * sqrt(dot(a, a)) / h) ** 2
+            + (4 * self.nuVal / h**2) ** 2
+        )
         SUPG = tau * dot(dot(a, nabla_grad(w)), R1) * dx
 
-        F1 = unsteady + convection + viscous + forcing + ibp + consistency + penalty + SUPG
+        F1 = (
+            unsteady
+            + convection
+            + viscous
+            + forcing
+            + ibp
+            + consistency
+            + penalty
+            + SUPG
+        )
         a1 = form(lhs(F1))
         L1 = form(rhs(F1))
         A1 = create_matrix(a1)
@@ -291,7 +383,9 @@ class Chorin(NavStokesFEMSolver):
 
         # --- Step 3: velocity correction -- unchanged from solve_strong --- #
         a3 = form(self.rho * dot(u, w) * dx)
-        L3 = form(self.rho * dot(self.u_s, w) * dx - k * dot(nabla_grad(self.p_), w) * dx)
+        L3 = form(
+            self.rho * dot(self.u_s, w) * dx - k * dot(nabla_grad(self.p_), w) * dx
+        )
         A3 = assemble_matrix(a3)
         A3.assemble()
         b3 = create_vector(extract_function_spaces(L3))
@@ -313,7 +407,13 @@ class Chorin(NavStokesFEMSolver):
         solver3.setType(PETSc.KSP.Type.CG)
         solver3.getPC().setType(PETSc.PC.Type.SOR)
 
+        # Steps between writes needed to hit self.fps output frames per
+        # second of simulated time, given this run's dt.
+        write_every = max(1, round(1 / (self.fps * dt)))
+
+        progress = tqdm.autonotebook.tqdm(desc="Solving PDE", total=num_steps)
         for i in range(num_steps):
+            progress.update(1)
             t += dt
             inlet_velocity.set_time(t)
             u_inlet.interpolate(inlet_velocity)
@@ -326,7 +426,9 @@ class Chorin(NavStokesFEMSolver):
             with b1.localForm() as loc:
                 loc.set(0)
             assemble_vector(b1, L1)
-            b1.ghostUpdate(addv=PETSc.InsertMode.ADD_VALUES, mode=PETSc.ScatterMode.REVERSE)
+            b1.ghostUpdate(
+                addv=PETSc.InsertMode.ADD_VALUES, mode=PETSc.ScatterMode.REVERSE
+            )
             solver1.solve(b1, self.u_s.x.petsc_vec)
             self.u_s.x.scatter_forward()
 
@@ -335,7 +437,9 @@ class Chorin(NavStokesFEMSolver):
                 loc.set(0)
             assemble_vector(b2, L2)
             apply_lifting(b2, [a2], [bcp])
-            b2.ghostUpdate(addv=PETSc.InsertMode.ADD_VALUES, mode=PETSc.ScatterMode.REVERSE)
+            b2.ghostUpdate(
+                addv=PETSc.InsertMode.ADD_VALUES, mode=PETSc.ScatterMode.REVERSE
+            )
             set_bc(b2, bcp)
             solver2.solve(b2, self.p_.x.petsc_vec)
             self.p_.x.scatter_forward()
@@ -344,13 +448,23 @@ class Chorin(NavStokesFEMSolver):
             with b3.localForm() as loc:
                 loc.set(0)
             assemble_vector(b3, L3)
-            b3.ghostUpdate(addv=PETSc.InsertMode.ADD_VALUES, mode=PETSc.ScatterMode.REVERSE)
+            b3.ghostUpdate(
+                addv=PETSc.InsertMode.ADD_VALUES, mode=PETSc.ScatterMode.REVERSE
+            )
             solver3.solve(b3, self.u_.x.petsc_vec)
             self.u_.x.scatter_forward()
 
-            with self.u_.x.petsc_vec.localForm() as loc_, self.u_n.x.petsc_vec.localForm() as loc_n:
+            with (
+                self.u_.x.petsc_vec.localForm() as loc_,
+                self.u_n.x.petsc_vec.localForm() as loc_n,
+            ):
                 loc_.copy(loc_n)
 
+            # Write solutions to file
+            if (i + 1) % write_every == 0 or i == num_steps - 1:
+                self.writer(t, self.u_, self.p_)
+
+        progress.close()
         solver1.destroy()
         solver2.destroy()
         solver3.destroy()

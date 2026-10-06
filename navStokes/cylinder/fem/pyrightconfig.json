@@ -1,0 +1,24 @@
+{
+  "venvPath": "/home/morban/miniconda3/envs",
+  "venv": "fenics-env",
+  "pythonVersion": "3.12",
+  "pythonPlatform": "Linux",
+  "exclude": [
+    "**/__pycache__"
+  ],
+  "typeCheckingMode": "basic",
+  "reportUndefinedVariable": "none",
+
+  // petsc4py's own stub types PETSc.ScalarType as `numpy.dtype`, when at
+  // runtime it's a callable numpy scalar type (e.g. numpy.complex128) --
+  // every PETSc.ScalarType(...) call trips reportCallIssue as a result.
+  "reportCallIssue": "none",
+
+  // ufl ships py.typed but its Form/Measure/Expr operator methods
+  // (__add__, __rmul__, ...) have no return-type annotations and branch on
+  // isinstance() at runtime; pyright's inference loses precision partway
+  // through and lands on None in some branches. Any `expr * dx` or form
+  // addition/subtraction trips reportOperatorIssue/reportOptionalOperand.
+  "reportOperatorIssue": "none",
+  "reportOptionalOperand": "none"
+}

@@ -23,6 +23,10 @@ discretization:
       family: Lagrange
       degree: 1   # Q1/P1
 
+solver:
+  time-solver: Chorin # Determines what method to use for the time-stepping solving of fields.
+  bc_enforcement: weak # Determines if the boundary conditions will be strongly or weakly enforced.
+
 # DFG benchmark case definitions -- single source of truth for each case's
 # inlet peak velocity, whether it's time-ramped, and how long to run. Ubar
 # (used in the drag/lift normalization constant) is derived from Um in code
@@ -48,3 +52,6 @@ cases:
     Um: 1.5
     ramped: true
     T: 8.0
+
+results:
+  fps: 30

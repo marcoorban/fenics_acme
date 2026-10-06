@@ -1,7 +1,8 @@
 from pathlib import Path
 
-from mpi4py import MPI
 from dolfinx.io import gmsh
+from mpi4py import MPI
+
 
 def read_mesh(fileName):
     cylinderDir = Path(__file__).parent.parent.parent

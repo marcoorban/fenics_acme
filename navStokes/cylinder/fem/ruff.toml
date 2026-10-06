@@ -1,0 +1,8 @@
+target-version = "py312"
+extend-exclude = ["__pycache__"]
+
+[lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[lint.isort]
+known-first-party = ["argparser", "boundaryConditions", "meshreader", "solvers", "yamlreader"]

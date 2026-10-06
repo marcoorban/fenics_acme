@@ -1,3 +1,7 @@
+import numpy as np
+from petsc4py import PETSc
+
+
 class SinuPoiseuilleFlow:
 
         def __init__(self, t, Um):

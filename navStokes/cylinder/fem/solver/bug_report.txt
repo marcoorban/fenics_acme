@@ -1,0 +1,135 @@
+Bug report: cylinder/fem/supg (main.py, solvers.py, boundaryConditions.py)
+Generated 2026-10-05 via Claude Code review.
+STATUS (2026-10-06): all 9 items below have been applied. Kept for reference
+-- see the correction on item 1's fix below (the originally suggested fix
+was itself wrong).
+
+Confirmed with `python3 -m py_compile` on each file (only main.py fails to
+even parse) and by manual read-through of solvers.py / boundaryConditions.py
+for undefined/missing names.
+
+------------------------------------------------------------------------------
+1. main.py:91 -- SyntaxError (confirmed by py_compile)
+
+    u_inlet = SinuPoiseuilleFlow(t=0.0, Um)
+
+Positional argument after a keyword argument. Fix -- NOTE: the obvious-looking
+`SinuPoiseuilleFlow(Um, t=0.0)` is ALSO wrong, since the class signature is
+__init__(self, t, Um) (t first): that call passes Um positionally into the
+t slot, then keyword t=0.0 collides with it -> TypeError: got multiple
+values for argument 't'. Use keywords on both to sidestep the order
+entirely:
+
+    inlet_velocity = SinuPoiseuilleFlow(t=0.0, Um=Um)
+
+------------------------------------------------------------------------------
+2. solvers.py -- the file has ZERO import statements
+
+Uses TrialFunction, TestFunction, Constant, Function, PETSc, np, dirichletbc,
+locate_dofs_topological, form, lhs, rhs, create_matrix, create_vector,
+extract_function_spaces, assemble_matrix, assemble_vector, apply_lifting,
+set_bc, FacetNormal, CellDiameter, Measure, dot, nabla_grad, grad, inner,
+outer, sym, div, sqrt -- none imported anywhere in the module. Modules do not
+inherit names from whatever module imported them, so main.py's imports do not
+help. Chorin(V, Q, faceTags) fails immediately with
+NameError: name 'TrialFunction' is not defined (inside
+NavStokesFEMSolver.__init__).
+
+Fix: add the same import block main.py already has (minus argparser/
+meshreader/yamlreader/solvers-specific bits) to the top of solvers.py.
+
+------------------------------------------------------------------------------
+3. boundaryConditions.py -- missing numpy / petsc4py imports
+
+__call__ uses np.zeros(...) and PETSc.ScalarType but the file never does
+`import numpy as np` or `from petsc4py import PETSc`. Doesn't fail at import
+time (only inside the method body), but fails the first time __call__ runs.
+
+Fix: add
+    import numpy as np
+    from petsc4py import PETSc
+to the top of boundaryConditions.py.
+
+------------------------------------------------------------------------------
+4. solvers.py:217 -- `u_inlet` referenced before assignment
+
+Inside solve_weak(self, dt, T, inlet_velocity):
+
+    Um = u_inlet.Um          # line 217 -- u_inlet not yet defined
+    ...
+    u_inlet = Function(V)    # line 235 -- first assignment, later in body
+
+Because u_inlet is assigned later in the same function, Python treats it as
+local for the whole function body -> UnboundLocalError at line 217. The
+method's own parameter is named `inlet_velocity`, and it's used correctly
+elsewhere (inlet_velocity.set_time(t) in the time loop) -- line 217 should
+read:
+
+    Um = inlet_velocity.Um
+
+------------------------------------------------------------------------------
+5. solvers.py:258 -- `vDegree` is not defined in this module
+
+    beta = Constant(mesh, PETSc.ScalarType(10 * vDegree**2))
+
+vDegree only exists as a global in main.py (from config.yaml's
+discretization.function_spaces.velocity.degree); solvers.py never receives
+it. NameError at call time.
+
+Fix: pass it in explicitly, e.g. store it on the Chorin instance in __init__
+(self.vDegree = V.ufl_element().degree, or pass vDegree as a constructor
+arg) instead of relying on a cross-module global that doesn't exist here.
+
+------------------------------------------------------------------------------
+6. main.py:93-94 -- undefined name `chorin_weak`
+
+    chorin = Chorin(V, Q, faceTags)
+    u, p = chorin_weak.solve_weak(dt, T, u_inlet)
+
+chorin_weak was never created. Fix:
+
+    u, p = chorin.solve_weak(dt, T, u_inlet)
+
+------------------------------------------------------------------------------
+7. main.py never calls set_physical_parameters(config)
+
+solve_weak depends on self.rho, self.D, self.f (and the mu/rho/nu Constants)
+which are only set inside NavStokesFEMSolver.set_physical_parameters(config).
+main.py builds `chorin` but never calls
+chorin.set_physical_parameters(config) before chorin.solve_weak(...), so
+those attributes don't exist yet -> AttributeError.
+
+Fix: call `chorin.set_physical_parameters(config)` right after constructing
+`chorin`, before solve_weak.
+
+------------------------------------------------------------------------------
+8. solvers.py solve_strong() calls self._InletVelocity(t, Um)
+
+No _InletVelocity method/class is defined anywhere in solvers.py or
+boundaryConditions.py. Currently dead code since main.py only calls
+solve_weak, but solve_strong will crash with AttributeError if ever invoked.
+
+Fix applied: self._InletVelocity(t, Um) -> SinuPoiseuilleFlow(t=t, Um=Um)
+(imported from boundaryConditions.py), matching solve_weak's inlet handling.
+
+------------------------------------------------------------------------------
+9. Logic bug: `isRamped` is read but never used (silent, no crash)
+
+main.py:65 reads
+    isRamped = config["cases"][case]["ramped"]
+but always instantiates SinuPoiseuilleFlow regardless of its value. config.yaml
+has ramped: false for cases 1 and 2, implying they should use
+ConstantPoiseuilleFlow (imported on line 7 of main.py but never referenced).
+As written, every case gets the sinusoidal ramp-up/down profile, which is
+only correct for case 3 (ramped: true).
+
+Fix: branch on isRamped, e.g.:
+    FlowClass = SinuPoiseuilleFlow if isRamped else ConstantPoiseuilleFlow
+    u_inlet = FlowClass(Um, t=0.0)
+
+------------------------------------------------------------------------------
+Suggested fix order: 1 and 6 are outright crashes on any run; 2 and 3 are
+missing-import crashes that surface right after; 4, 5, 7 are logic bugs
+inside solve_weak that only become visible once the imports are fixed; 8 only
+matters if solve_strong is meant to stay in use; 9 is a silent correctness
+bug (wrong inlet profile for cases 1/2) that won't throw at all.
