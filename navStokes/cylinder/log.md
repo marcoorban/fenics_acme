@@ -284,6 +284,100 @@ OpenFOAM case's `mesh/mesh.py`.
 
 ### Learnings
 
+- **2026-10-06 — DRY'd `fem/solver/solvers.py` (renamed from `fem/supg/`): `solve_strong`/`solve_weak` became
+  `Chorin.solve()` (shared) + `ChorinWeak(Chorin)` overriding two hooks, after confirming with the user that
+  their Step 1 physics should actually be unified, not just share surrounding code.** Before this, the two
+  methods' Step 1 used genuinely different discretizations, not just different BC enforcement: `solve_strong`
+  had Crank-Nicolson-averaged convection (`dot(u_n, nabla_grad(0.5*(u+u_n)))`) and viscous
+  (`0.5*mu*grad(u+u_n)`, full gradient); `solve_weak` had frozen-transport convection
+  (`outer(u_n, u)`, fully implicit in `u`) and viscous via symmetric strain (`2*nu*sym(grad(u))`). Per the
+  user's explicit choice (asked directly rather than guessed, since this changes `solve_weak`'s actual
+  numerics), adopted `solve_strong`'s CN-averaged terms as the one shared bulk formulation (now built once in
+  `Chorin.solve()`), with `ChorinWeak.extra_step1_terms()` adding Nitsche ibp/consistency/penalty + SUPG on
+  top. Deliberately did **not** reconcile the Nitsche terms' own stress operator
+  (`sigma_u(uu) = 2*nu*sym(grad(uu))`) with the new shared bulk operator — doing that properly means re-deriving
+  the Nitsche boundary flux from the new bulk term's integration-by-parts, which is new numerics, not a
+  refactor; left it as its own self-contained, standard Nitsche formulation. Did update SUPG's residual `R1`
+  to track the new shared bulk terms (`rho*dot(u_n, nabla_grad(0.5*(u+u_n))) - 0.5*mu*div(grad(u+u_n))`,
+  previously `rho*dot(u_n, nabla_grad(u)) - div(2*nu*sym(grad(u)))`) since SUPG only makes sense if it
+  stabilizes the equation actually being assembled. Mechanically: `boundary_conditions()` (default: one
+  `dirichletbc` per `(tag, target)` pair; `ChorinWeak`: returns `[]`, since BCs are already baked into `F1`)
+  and `extra_step1_terms()` (default: `0`, relies on `Form.__add__`'s `other == 0 → return self` special case
+  confirmed by reading `ufl`'s own `Form.__add__` source) are the only two overridden methods — everything
+  else (`Re`/`nu`/`mu` derivation, Step 2/3, KSP setup, the time loop, `write_every`/writer calls, progress
+  bar, cleanup) lives once in `Chorin.solve()`. This also required switching the walls/cylinder zero-BC target
+  from a raw `numpy.array` (what `solve_strong` used) to a `dolfinx.fem.Constant`, since the same
+  `dirichlet_boundaries` list now has to work as both a `dirichletbc` value and a UFL Nitsche target `g` (a
+  raw array can't appear in a UFL expression like `u - g`) — confirmed `dirichletbc`'s `value` parameter
+  accepts `Constant` directly via its own type stub. `main.py` now dispatches on `config["solver"]
+  ["bc_enforcement"]` (`SolverClass = ChorinWeak if bc_enf == "weak" else Chorin`), a config key that had been
+  read into `bc_enf` since the VTX-writer work below but never actually used until now. Net effect on line
+  count: `solvers.py` 484 → 359 lines, zero duplicated step logic; pyright error count on the file (see the
+  2026-10-06 tooling entry below) dropped 46 → 23 purely from deleting the duplication, no new errors
+  introduced.
+
+- **2026-10-06 — added `fem/solver/postProcess.py`'s `VTX_Files`: lazily-opened `dolfinx.io.VTXWriter` pair
+  (velocity + pressure), driven via `__call__` so the solver's time loop just does `self.writer(t, self.u_,
+  self.p_)`.** Threaded `writer` through as a 5th constructor arg on `NavStokesFEMSolver`/`Chorin` (stored as
+  `self.writer`) per the user's explicit design — `main.py` builds one `VTX_Files(folder)` and passes it in,
+  rather than the solver owning its own I/O path. `VTXWriter` lazily opens on the first `__call__` (grabbing
+  `mesh.comm` off `u_.function_space.mesh`) rather than at `VTX_Files.__init__`, since `__init__` only receives
+  the output folder, not the mesh/functions. Confirmed the installed dolfinx 0.11.0's actual `VTXWriter`
+  signature by introspection rather than assuming a tutorial-era one: `VTXWriter(comm, filename, output,
+  engine='BPFile', mesh_policy=...)`, `.write(t: float)`, `.close()` — kept the already-stubbed `engine="BP4"`
+  rather than the newer default `'BPFile'`, matching the user's own draft. Output cadence: `config.yaml`
+  already had an unused `results.fps: 30` key; wired it through `set_physical_parameters` (`self.fps`) and
+  derived `write_every = max(1, round(1 / (self.fps * dt)))` inside the loop (`(i+1) % write_every == 0 or i ==
+  num_steps - 1`, always including the final step) — e.g. case 3's `dt=0.000625`/`T=8.0` gives
+  `write_every≈53`, landing on the full `T*fps=240` output frames.
+
+- **2026-10-06 — set up `pyright`+`ruff` for `cylinder/fem/` against the `fenics-env` conda environment (not
+  `fenics_acme/navStokes/.venv`, a separate uv-managed env with no FEniCSx stack at all), and found two
+  confirmed upstream stub bugs worth not re-diagnosing.** `pyrightconfig.json`'s `venvPath`/`venv` pointing at
+  a conda env (not a venv with `pyvenv.cfg`) works fine — pyright only needs `<venvPath>/<venv>/lib/pythonX.Y/
+  site-packages` to exist, confirmed by seeing it correctly resolve `dolfinx`/`petsc4py`/`ufl`/`basix` imports
+  and even catch a real bug (`self._InletVelocity` not existing on `Chorin`, `reportAttributeAccessIssue`)
+  that a plain syntax check wouldn't. Two stub-level false-positive categories, both suppressed via
+  `diagnosticSeverityOverrides` after confirming root cause by reading the actual stub/source rather than
+  guessing: (1) `reportCallIssue` — `petsc4py/PETSc.pyi:134` types `ScalarType: numpy.dtype = ...`, but at
+  runtime it's a callable numpy scalar type (e.g. `numpy.complex128`); every `PETSc.ScalarType(...)` call (used
+  everywhere in this codebase) trips "Object of type dtype[Any] is not callable". (2) `reportOperatorIssue`/
+  `reportOptionalOperand` — `ufl` ships `py.typed` but its `Form`/`Measure`/`Expr` operator methods
+  (`Measure.__rmul__`, `Form.__add__`, confirmed by reading their source directly) have no return-type
+  annotations and branch on `isinstance()` at runtime; pyright's inference loses precision partway through
+  branches and lands on `None`, so any `expr * dx` or form `+`/`-` trips it — i.e. nearly every line of FEM
+  form assembly in this codebase. Also suppressed `reportUndefinedVariable` in pyright specifically (keeping
+  `ruff`'s `F821` as the sole source for that check) to stop the two tools double-reporting the exact same
+  line. Left `reportArgumentType`/`reportAttributeAccessIssue` enabled despite a smaller, separate cluster of
+  likely-false-positive `Cofunction`-vs-`Function` ambiguity (`self.u_.x`, `ghostUpdate` int-vs-enum
+  complaints) — lower volume, not yet root-caused the way the two suppressed categories were, and still
+  catches real bugs elsewhere, so left as-is rather than blanket-silenced. `ruff.toml`/`pyrightconfig.json`
+  live at `cylinder/fem/` (not inside `solver/`) since `navStokes/pyproject.toml` (a `uv`-managed project for
+  `cavity`/`cavity_fineMesh`, unrelated deps) would otherwise be picked up as the nearest config root by both
+  tools' upward directory search — confirmed `ruff check --show-settings` resolves to the closer
+  `cylinder/fem/ruff.toml` as expected.
+
+- **2026-10-06 — found and fixed a cluster of import/undefined-name bugs in `fem/solver/` (then `fem/supg/`)
+  that would have crashed on the very first run, confirmed one-by-one with `py_compile`/`ruff`/`pyright`
+  rather than by inspection alone.** `solvers.py` had **zero import statements** despite using ~30 external
+  names (`TrialFunction`, `Constant`, `PETSc`, `dirichletbc`, `form`, `assemble_matrix`, UFL operators, ...) —
+  modules don't inherit names from whatever imported them, so `main.py`'s own imports didn't help;
+  `Chorin(...)` failed immediately with `NameError` inside `NavStokesFEMSolver.__init__`. `main.py` had a
+  `SyntaxError` (`SinuPoiseuilleFlow(t=0.0, Um)`, positional arg after keyword) and an undefined
+  `chorin_weak.solve_weak(...)` (should've been `chorin.solve_weak(...)`) — fixed using keyword args on both
+  sides (`SinuPoiseuilleFlow.__init__(self, t, Um)` takes `t` *first*, so the "obvious" positional fix
+  `SinuPoiseuilleFlow(Um, t=0.0)` is itself wrong — collides on `t` — keywords on both sides sidestep the
+  ordering entirely). `main.py` also never called `chorin.set_physical_parameters(config)` before
+  `solve_weak`, so `self.rho`/`self.D`/`self.f` didn't exist yet. Inside `solve_weak`: `Um = u_inlet.Um` read
+  `u_inlet` before its only assignment later in the same function (`UnboundLocalError` — Python treats a
+  name assigned anywhere in a function as local for the whole function body), should've read the method's own
+  `inlet_velocity` parameter; and a Nitsche penalty line used a bare `vDegree` that only ever existed as a
+  `main.py` global, never passed in — threaded through as a constructor arg instead. `solve_strong` called
+  `self._InletVelocity(...)`, a method that was never defined anywhere. Also: `main.py` read `isRamped` from
+  `config.yaml` but never branched on it, so every case (including cases 1/2, `ramped: false`) got the
+  sinusoidal ramp profile instead of `ConstantPoiseuilleFlow` — a silent correctness bug, no crash. All fixed
+  and verified (both `ruff check --select F821` and `pyright` clean on all three files afterward).
+
 - **2026-10-05 — built `femSolver.py`'s `Chorin.solve_weak` (Nitsche-enforced BCs + SUPG), and in the process
   confirmed a real UFL limitation: a single scalar form can't mix `TestFunction`/`TrialFunction` objects from
   two different, separately-created function spaces (`V` and `Q` here).** UFL numbers arguments by role only

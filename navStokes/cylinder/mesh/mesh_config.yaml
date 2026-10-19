@@ -1,0 +1,20 @@
+# Resolution presets for quad2D.py's cylinder mesh. size_cyl/size_far feed
+# its Distance+Threshold grading field (target element size right at the
+# cylinder surface / far from it, respectively -- see quad2D.py's own
+# comments for dist_min/dist_max, which stay fixed across presets since
+# they're a geometric grading-region extent, not a resolution knob).
+#
+# "fine" is this project's long-established resolution (produces
+# quad2D_2504cells.msh) -- left unchanged. coarse/ultra_fine scale both
+# sizes uniformly relative to fine (larger size = coarser mesh, so coarse
+# multiplies by ~3, ultra_fine divides by ~5).
+presets:
+  coarse:
+    size_cyl: 0.045 # 3x fine's 0.015
+    size_far: 0.24 # 3x fine's 0.08
+  fine:
+    size_cyl: 0.015 # unchanged -- this project's established resolution
+    size_far: 0.08
+  ultra_fine:
+    size_cyl: 0.0075 # fine's 0.015 / 2
+    size_far: 0.04 # fine's 0.08 / 2

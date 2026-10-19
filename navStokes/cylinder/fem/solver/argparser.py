@@ -9,7 +9,7 @@ def parse_args():
         "--yaml",
         type=str,
         default="config.yaml",
-        help="Name of configuration file, in .yaml format."
+        help="Name of configuration file, in .yaml format.",
     )
     parser.add_argument(
         "-m",
@@ -17,16 +17,23 @@ def parse_args():
         type=str,
         default="quad2D_2504cells.msh",
         help="Name of meshfile to be read, resolved against cylinder/mesh/ -- "
-        "see cylinder/mesh/meshes_summary.csv for what's available."
+        "see cylinder/mesh/meshes_summary.csv for what's available.",
     )
     parser.add_argument(
         "-c",
         "--case",
         type=int,
-        default=3,
+        default=2,
         choices=[1, 2, 3],
         help="DFG case number -- see the 'cases' section of config.yaml "
         "for each one's name/parameters.",
     )
+    parser.add_argument(
+        "-b",
+        "--bc",
+        type=str,
+        default=None,
+        choices=["strong", "weak"],
+        help="Override config.yaml's solver.bc_enforcement (strong/weak).",
+    )
     return parser.parse_args()
-
