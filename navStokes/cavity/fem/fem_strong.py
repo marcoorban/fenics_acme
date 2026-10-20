@@ -38,11 +38,16 @@ right = locate_entities_boundary(mesh, fdim, lambda x: np.isclose(x[0], 1))
 top = locate_entities_boundary(mesh, fdim, lambda x: np.isclose(x[1], 1))
 bottom = locate_entities_boundary(mesh, fdim, lambda x: np.isclose(x[1], 0))
 
+L = 1.0  # unit square cavity
+nu_val = 0.01
+U_lid = 0.005
+Re = U_lid * L / nu_val  # = Pe for momentum transport (nu is the only diffusivity)
+
 # No-slip on left/right/bottom: u = (0, 0). grad(p) = 0 there needs no
 # Dirichlet BC of its own -- it's the natural (do-nothing) condition that
 # already holds on any boundary with no pressure BC imposed on it.
 noslip = Constant(mesh, PETSc.ScalarType((0, 0)))
-lid = Constant(mesh, PETSc.ScalarType((20, 0)))
+lid = Constant(mesh, PETSc.ScalarType((U_lid, 0)))
 bcu = [
     dirichletbc(noslip, locate_dofs_topological(V, fdim, left), V),
     dirichletbc(noslip, locate_dofs_topological(V, fdim, right), V),
@@ -66,7 +71,7 @@ u_n = Function(V, name="u_n")  # previous/known iterate -- convection is
 u_ = Function(V, name="u")  # solution, filled in by LinearProblem.solve()
 p_ = Function(Q, name="p")
 
-nu = Constant(mesh, PETSc.ScalarType(0.01))  # Re = U*L/nu = 1*1/0.01 = 100
+nu = Constant(mesh, PETSc.ScalarType(nu_val))
 
 convective = inner(dot(u_n, nabla_grad(u_n)), w) * dx
 diffusive = nu * inner(grad(u), grad(w)) * dx
@@ -107,7 +112,7 @@ for step in steps:
     u_n.x.array[:] = u_.x.array
 print("Solver finished.")
 
-results_dir = Path(__file__).parent / "results" / "strong"
+results_dir = Path(__file__).parent / "results" / "strong" / f"Re_{Re:g}"
 results_dir.mkdir(parents=True, exist_ok=True)
 with VTKFile(mesh.comm, results_dir / "u.pvd", "w") as f:
     f.write_function(u_)
