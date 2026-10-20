@@ -49,8 +49,13 @@ Q = functionspace(mesh, s_cg)
 # terms via ds measures on ft, not by dirichletbc()/locate_dofs_topological.
 # Tags match mesh.py's physical groups: lid=1 (moving lid), wall=2 (the
 # other three, fixed, no-slip edges).
+L = 1.0  # unit square cavity
+nu_val = 0.01
+U_lid = 0.005
+Re = U_lid * L / nu_val  # = Pe for momentum transport (nu is the only diffusivity)
+
 noslip = Constant(mesh, PETSc.ScalarType((0, 0)))
-lid = Constant(mesh, PETSc.ScalarType((20, 0)))
+lid = Constant(mesh, PETSc.ScalarType((U_lid, 0)))
 dirichlet_boundaries = [(1, lid), (2, noslip)]
 bcu = []
 
@@ -70,7 +75,7 @@ u_n = Function(V, name="u_n")  # previous/known iterate -- convection is
 u_ = Function(V, name="u")  # solution, filled in by LinearProblem.solve()
 p_ = Function(Q, name="p")
 
-nu = Constant(mesh, PETSc.ScalarType(0.01))  # Re = U*L/nu = 1*1/0.01 = 100
+nu = Constant(mesh, PETSc.ScalarType(nu_val))
 
 convective = inner(dot(u_n, nabla_grad(u_n)), w) * dx
 diffusive = nu * inner(grad(u), grad(w)) * dx
@@ -85,16 +90,26 @@ continuity = div(u) * q * dx
 # penalty(u,w,g), with consistency/penalty expanded in (u - g) and split
 # into their bilinear-in-u piece (-> a00) and known-g piece (-> L0, with
 # the sign flip that moving a residual term to the RHS of a*x=L implies).
+# F1/lhs()/rhs() don't work here -- V and Q are separate function spaces,
+# not one MixedFunctionSpace, so a combined residual has two different
+# Arguments at the same number/part and UFL can't split it; the a00/L0
+# block below is built by hand instead.
 # --- #
 vDegree = 2  # V is P2
-n = FacetNormal(mesh)
-h = CellDiameter(mesh)
-beta = Constant(mesh, PETSc.ScalarType(10 * vDegree**2))  # Nitsche penalty; tune if unstable
 
 
 def sigma_u(uu):
     return 2 * nu * sym(grad(uu))
 
+
+n = FacetNormal(mesh)
+h = CellDiameter(mesh)
+# Dimensionless Nitsche penalty constant; the actual penalty coefficient
+# is beta*nu/h (not beta/h) -- it must scale with nu to match the ibp/
+# consistency terms, which carry nu via sigma_u. Omitting nu here made
+# the penalty ~100x too stiff relative to the viscous terms (nu=0.01),
+# swamping the system and degrading the solution.
+beta = Constant(mesh, PETSc.ScalarType(10 * vDegree**2))  # tune if unstable
 
 nitsche_a00 = 0
 nitsche_L0 = 0
@@ -103,19 +118,26 @@ for tag, g in dirichlet_boundaries:
     nitsche_a00 += -dot(w, dot(sigma_u(u), n)) * ds_tag  # ibp
     nitsche_a00 += -dot(dot(sigma_u(w), n), u) * ds_tag  # consistency (bilinear part)
     nitsche_L0 += -dot(dot(sigma_u(w), n), g) * ds_tag  # consistency (known part)
-    nitsche_a00 += (beta / h) * dot(u, w) * ds_tag  # penalty (bilinear part)
-    nitsche_L0 += (beta / h) * dot(g, w) * ds_tag  # penalty (known part)
+    nitsche_a00 += (beta * nu / h) * dot(u, w) * ds_tag  # penalty (bilinear part)
+    nitsche_L0 += (beta * nu / h) * dot(g, w) * ds_tag  # penalty (known part)
 
-# SUPG, stabilizing the steady convection/diffusion momentum residual
-# R1 = (u_n . grad)u_n - nu*div(grad(u)) (no pressure term, no time
-# derivative -- this problem is steady with fully explicit convection).
-# tau is the reference's steady-state limit (its unsteady 2/dt term is
-# dropped since there's no time step here).
+# SUPG, stabilizing convection only: R1 = (u_n . grad)u_n. The diffusive
+# (-nu*div(grad(u))) piece is deliberately left out -- feeding a P2
+# field's strong-form (second-derivative) Laplacian into a bilinear form,
+# scaled by an unbounded tau (no time step here to cap it, unlike the
+# unsteady reference), severely ill-conditions the system and makes the
+# Nitsche-enforced BC go unsatisfied (confirmed empirically: with it,
+# lid mean velocity collapses to ~0.5 instead of ~20 and the solve takes
+# 15x longer; without it, the solution is sane). R1 has no dependence on
+# the trial function u at all now, so SUPG contributes only to L0, not
+# a00 -- it's a pure stabilizing load, not a bilinear term.
 a_transport = u_n  # frozen transport velocity for SUPG's tau/R1
-tau = 1 / sqrt((2 * sqrt(dot(a_transport, a_transport)) / h) ** 2 + (4 * nu / h**2) ** 2)
+tau = 1 / sqrt(
+    (2 * sqrt(dot(a_transport, a_transport)) / h) ** 2 + (4 * nu / h**2) ** 2
+)
 supg_test = dot(a_transport, nabla_grad(w))
-nitsche_a00 += -nu * tau * dot(supg_test, div(grad(u))) * dx  # SUPG (bilinear part)
-nitsche_L0 += -tau * dot(supg_test, dot(u_n, nabla_grad(u_n))) * dx  # SUPG (known part)
+R1 = dot(u_n, nabla_grad(u_n))
+nitsche_L0 += -tau * dot(supg_test, R1) * dx  # SUPG (known part)
 
 zero_pp = Constant(mesh, PETSc.ScalarType(0)) * p * q * dx  # explicit zero
 # block, not None -- the pressure pin BC below needs a real (1, 1) block
@@ -151,7 +173,7 @@ for step in steps:
     u_n.x.array[:] = u_.x.array
 print("Solver finished.")
 
-results_dir = Path(__file__).parent / "results" / "weak"
+results_dir = Path(__file__).parent / "results" / "weak" / f"Re_{Re:g}"
 results_dir.mkdir(parents=True, exist_ok=True)
 with VTKFile(mesh.comm, results_dir / "u.pvd", "w") as f:
     f.write_function(u_)
