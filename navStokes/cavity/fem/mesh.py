@@ -1,12 +1,20 @@
+import argparse
+
 import gmsh
 
 
-def create_mesh():
+def create_mesh(scale=1.0):
     """Unit square [0,1]x[0,1], quad mesh, refined near all four edges
     (graded via a Distance-to-boundary + Threshold sizing field). Writes
     the mesh to a .msh file instead of returning an in-memory dolfinx
     mesh -- run this once, then have the solver read the saved file
-    (see meshreader.py) rather than regenerating the mesh every run."""
+    (see meshreader.py) rather than regenerating the mesh every run.
+
+    scale multiplies SizeMin/SizeMax (both fixed at a 1:5 ratio): 1.0
+    reproduces the baseline "fine" mesh (SizeMin=0.01, SizeMax=0.05,
+    10504 cells); >1 is rougher (fewer, bigger cells), <1 is finer
+    (more, smaller cells). Cell count scales roughly as 1/scale**2 in
+    2D, so e.g. scale=sqrt(5) gives a ~5x-rougher mesh."""
     gmsh.initialize()
     gmsh.model.add("cavity")
 
@@ -30,8 +38,8 @@ def create_mesh():
 
     size = gmsh.model.mesh.field.add("Threshold")
     gmsh.model.mesh.field.setNumber(size, "InField", dist)
-    gmsh.model.mesh.field.setNumber(size, "SizeMin", 0.01)
-    gmsh.model.mesh.field.setNumber(size, "SizeMax", 0.05)
+    gmsh.model.mesh.field.setNumber(size, "SizeMin", 0.01 * scale)
+    gmsh.model.mesh.field.setNumber(size, "SizeMax", 0.05 * scale)
     gmsh.model.mesh.field.setNumber(size, "DistMin", 0.0)
     gmsh.model.mesh.field.setNumber(size, "DistMax", 0.3)
     gmsh.model.mesh.field.setAsBackgroundMesh(size)
@@ -67,4 +75,13 @@ def create_mesh():
 
 
 if __name__ == "__main__":
-    create_mesh()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--scale",
+        type=float,
+        default=1.0,
+        help="Element-size multiplier vs. the baseline fine mesh (SizeMin="
+        "0.01, SizeMax=0.05). >1 = rougher, <1 = finer.",
+    )
+    args = parser.parse_args()
+    create_mesh(args.scale)

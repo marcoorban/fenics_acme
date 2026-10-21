@@ -214,6 +214,47 @@ future case's validation plots, e.g. cylinder drag/lift/Strouhal comparisons):
 
 ## #fem
 
+- **[cavity]** — **The Navier-Stokes convective term `(u.grad)u` is nonlinear
+  because the unknown plays two roles at once — it's both the transported
+  quantity and the transport velocity.** Contrast with a passive
+  advection-diffusion problem (`-D*grad^2(f) + a.grad(f) = source`): there,
+  the transport velocity `a` is externally given data, so the equation is
+  linear in the one unknown `f` and assembles into a single `LinearProblem`
+  with no iteration needed. In momentum transport, `a` *is* `u` — the thing
+  being solved for — so `(u.grad)u` is quadratic in the unknown and can't be
+  assembled into a bilinear form directly.
+  **Fix: Picard linearization** — replace *one* copy of `u` in the
+  convective term with a known/lagged field `u_n` (playing `a`'s role),
+  and keep the *other* copy as the real trial function `u` (playing `f`'s
+  role): `inner(dot(u_n, nabla_grad(u)), w)*dx`. This restores the passive-
+  scalar structure, so the term is linear in `u` for a *given* `u_n` and
+  belongs in the system matrix, not the right-hand side. Iterate — solve,
+  set `u_n <- u`, resolve — until `u_n` and `u` agree to within tolerance;
+  at that fixed point the Picard-linearized equation coincides with the
+  true nonlinear steady NS equation.
+  **What NOT to do (caught in `cavity/fem/fem_strong.py` and the two
+  `fem_weak*.py` variants, fixed 2026-10-21):** the original scheme froze
+  *both* copies of `u` at `u_n` (`inner(dot(u_n, nabla_grad(u_n)), w)*dx`)
+  and moved the entire term to the RHS as a precomputed forcing — the
+  trial function `u` never appeared in the convective term at all. This
+  is NOT Picard; it's a single fully-explicit/Jacobi-style update, and it's
+  structurally weaker: naively *iterating* it (`u_n <- u_`, resolve, repeat)
+  diverges exponentially by Re~2000 (`max|u|` observed going 20 → 86 → 3,683
+  → ... → 1e117 over 8 iterations), whereas real Picard converges cleanly
+  (observed: 6 iterations to `rel_change<1e-6` at Re=10). It also silently
+  broke downstream consistency: a SUPG stabilization term built the same
+  way (residual evaluated entirely at `u_n`, added only to the RHS) had no
+  coupling to the actual unknown, so it could only ever perturb the
+  solution — not stabilize it against the operator being solved — which is
+  exactly why it visibly biased the velocity profile away from the
+  (better-behaved) no-SUPG variant instead of just damping oscillations.
+  General lesson: a "convection = frozen-at-`u_n`, forcing-term-only"
+  scheme is a cheap trick worth trying to see how a solver breaks, but
+  it is not a substitute for even the simplest consistent nonlinear
+  iteration — and any *consistent* stabilization term added on top (SUPG,
+  etc.) needs to be built from the same linearization the base equation
+  uses, or it stops being consistent too.
+
 - **[cylinder]** — **MPI parallelism for FEniCSx/dolfinx scripts is set at the launcher,
   not in the script.** dolfinx scripts (e.g. `cylinder/fem/dokken/navStokes.py`) import
   `mpi4py.MPI` and pass `MPI.COMM_WORLD` into mesh reads/solves — that communicator adapts
