@@ -1,4 +1,5 @@
 import argparse
+import os
 import time
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from ufl import (
     grad,
     inner,
     nabla_grad,
+    sqrt,
     sym,
 )
 
@@ -37,6 +39,21 @@ parser.add_argument(
     "reynolds", type=float, help="Reynolds number Re = U_lid*L/nu (L=1, nu=0.01)."
 )
 args = parser.parse_args()
+
+# results/<mesh_label>/ -- CAVITY_MESH lets a sweep script (or the user's
+# shell) set this once and have every solver/postprocessing/gnuplot
+# script agree on it, instead of re-deriving or re-typing it everywhere.
+# Falls back to guessing from mesh.py's cell-count filename if unset, so
+# a bare "python3 fem_weak_SUPG.py cavity_2528cells.msh 100" still works.
+MESH_LABELS = {
+    "cavity_1968cells": "coarser",
+    "cavity_2528cells": "coarse",
+    "cavity_5432cells": "normal",
+    "cavity_10504cells": "fine",
+    "cavity_15152cells": "finest",
+}
+mesh_stem = Path(args.mesh).stem
+mesh_label = os.environ.get("CAVITY_MESH") or MESH_LABELS.get(mesh_stem, mesh_stem)
 
 meshData = gmsh.read_from_msh(args.mesh, MPI.COMM_WORLD, rank=0, gdim=2)
 mesh = meshData.mesh
@@ -96,9 +113,8 @@ diffusive = nu * inner(grad(u), grad(w)) * dx
 pressure = -p * div(w) * dx
 continuity = div(u) * q * dx
 
-# --- Nitsche (weak) enforcement of dirichlet_boundaries, replacing bcu.
-# No SUPG here (see fem_weak.py for that variant) -- this is otherwise
-# identical. Nitsche uses its own stress operator (2*nu*sym(grad(.))) --
+# --- Nitsche (weak) enforcement of dirichlet_boundaries, replacing bcu,
+# plus SUPG. Nitsche uses its own stress operator (2*nu*sym(grad(.))) --
 # a self-contained, standard Nitsche formulation, independent of the bulk
 # diffusive term above (which stays a plain Laplacian, as in fem.py).
 # Derived from the residual form ibp(u,w) + consistency(u,w,g) +
@@ -135,6 +151,26 @@ for tag, g in dirichlet_boundaries:
     nitsche_L0 += -dot(dot(sigma_u(w), n), g) * ds_tag  # consistency (known part)
     nitsche_a00 += (beta * nu / h) * dot(u, w) * ds_tag  # penalty (bilinear part)
     nitsche_L0 += (beta * nu / h) * dot(g, w) * ds_tag  # penalty (known part)
+
+# SUPG, stabilizing convection only: R1 = (u_n . grad)u, Picard-
+# consistent with the convective term above -- u_n is the known
+# transport velocity, u is the real trial function. The diffusive
+# (-nu*div(grad(u))) piece is deliberately left out -- feeding a P2
+# field's strong-form (second-derivative) Laplacian into a bilinear form,
+# scaled by an unbounded tau (no time step here to cap it, unlike the
+# unsteady reference), severely ill-conditions the system and makes the
+# Nitsche-enforced BC go unsatisfied (confirmed empirically: with it,
+# lid mean velocity collapses to ~0.5 instead of ~20 and the solve takes
+# 15x longer; without it, the solution is sane). R1 now depends on the
+# trial function u, so SUPG is a genuine bilinear term and belongs in
+# a00, not L0.
+a_transport = u_n  # frozen transport velocity for SUPG's tau/R1
+tau = 1 / sqrt(
+    (2 * sqrt(dot(a_transport, a_transport)) / h) ** 2 + (4 * nu / h**2) ** 2
+)
+supg_test = dot(a_transport, nabla_grad(w))
+R1 = dot(u_n, nabla_grad(u))
+nitsche_a00 += tau * dot(supg_test, R1) * dx  # SUPG (bilinear part)
 
 zero_pp = Constant(mesh, PETSc.ScalarType(0)) * p * q * dx  # explicit zero
 # block, not None -- the pressure pin BC below needs a real (1, 1) block
@@ -202,8 +238,7 @@ print(f"Solver finished after {total_iterations} total Picard iteration(s) "
       f"across {len(continuation_steps)} continuation stage(s), "
       f"rel_change={rel_change:.2e}, time={t_elapsed:.1f}s")
 
-mesh_stem = Path(args.mesh).stem
-results_dir = Path(__file__).parent / "results" / "weak_noSUPG" / mesh_stem / f"Re_{Re:g}"
+results_dir = Path(__file__).parent / "results" / f"Re_{Re:g}" / mesh_label / "weak_SUPG"
 results_dir.mkdir(parents=True, exist_ok=True)
 with VTKFile(mesh.comm, results_dir / "u.pvd", "w") as f:
     f.write_function(u_)
@@ -219,6 +254,6 @@ with open(timing_path, "a") as f:
     if write_header:
         f.write("# mesh method Re iterations time_s omega converged\n")
     f.write(
-        f"{mesh_stem} weak_noSUPG {Re:g} {total_iterations} {t_elapsed:.3f} "
+        f"{mesh_label} weak_SUPG {Re:g} {total_iterations} {t_elapsed:.3f} "
         f"{picard_omega:g} {int(rel_change < picard_tol)}\n"
     )

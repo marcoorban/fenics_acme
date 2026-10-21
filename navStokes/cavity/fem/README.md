@@ -1,6 +1,6 @@
 # Cavity solver scheme
 
-All three solvers (`fem_strong.py`, `fem_weak.py`, `fem_weak_noSUPG.py`) share the same
+All three solvers (`fem_strong.py`, `fem_weak_SUPG.py`, `fem_weak.py`) share the same
 nonlinear-iteration scheme for the convective term. Documented once here instead of
 repeated in every script's comments.
 
@@ -47,8 +47,9 @@ iteration budget.
 
 ## Logging
 
-Every solver run appends one line to `results/dat/solver_timing.dat` (shared across
-every method/mesh/Re combination, not per-case):
+Every solver run appends one line to `results/dat/solver_timing.dat` -- this one file
+stays at the top level (not per-mesh) since it's designed to compare across every
+method/mesh/Re combination in one place:
 
 ```
 # mesh method Re iterations time_s omega converged
@@ -57,3 +58,37 @@ every method/mesh/Re combination, not per-case):
 `iterations` and `time_s` are totals across *all* continuation stages for that run, not
 just the final target-Re stage. `converged` is `1` if the final stage's `rel_change` was
 under `picard_tol` when the loop exited, `0` if it hit `picard_max_iter` first.
+
+## Results layout
+
+```
+results/Re_<re>/<mesh_label>/{strong,weak,weak_SUPG}/   -- VTK output (u.pvd, p.pvd, ...)
+results/Re_<re>/<mesh_label>/dat/                        -- centerline.dat/_vertical.dat/.png
+results/dat/solver_timing.dat                            -- shared across every Re/mesh (see above)
+```
+
+Reynolds number is the outermost grouping, then mesh, then BC method -- a run is
+identified by `(Re, mesh, method)` in that order of how often each one changes across
+a sweep (least often to most).
+
+`<mesh_label>` comes from the `CAVITY_MESH` environment variable -- set once by each
+`run_sweep_*.fish` script (`set -gx CAVITY_MESH <label>`) and read by every solver
+script, `centerline_profile.py`, and `plot_centerline.gp` (via `system('echo -n
+$CAVITY_MESH')`, since gnuplot has no `getenv()` in this version). Set it yourself
+before running a script by hand: `set -gx CAVITY_MESH coarse` (fish) or `export
+CAVITY_MESH=coarse` (bash), and every script agrees on the same results folder without
+editing anything. If `CAVITY_MESH` is unset, the Python scripts fall back to guessing
+from `mesh.py`'s cell-count filename (see `MESH_LABELS` in each), and
+`plot_centerline.gp` falls back to `normal`:
+
+| cells | label | `mesh.py --scale` |
+|---|---|---|
+| 1968 | `coarser` | 2.514 |
+| 2528 | `coarse` | 2.236 (`sqrt(5)`) |
+| 5432 | `normal` | 1.414 (`sqrt(2)`) |
+| 10504 | `fine` | 1.0 (baseline) |
+| 15152 | `finest` | 0.816 (`1/sqrt(1.5)`) |
+
+The three BC-method folders match the script names directly now: `fem_strong.py` ->
+`strong`, `fem_weak_SUPG.py` (Nitsche + SUPG) -> `weak_SUPG`, `fem_weak.py` (Nitsche
+only) -> `weak`.

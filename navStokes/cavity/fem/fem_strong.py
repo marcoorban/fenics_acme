@@ -1,4 +1,5 @@
 import argparse
+import os
 import time
 from pathlib import Path
 
@@ -26,6 +27,21 @@ parser.add_argument(
     "reynolds", type=float, help="Reynolds number Re = U_lid*L/nu (L=1, nu=0.01)."
 )
 args = parser.parse_args()
+
+# results/<mesh_label>/ -- CAVITY_MESH lets a sweep script (or the user's
+# shell) set this once and have every solver/postprocessing/gnuplot
+# script agree on it, instead of re-deriving or re-typing it everywhere.
+# Falls back to guessing from mesh.py's cell-count filename if unset, so
+# a bare "python3 fem_strong.py cavity_2528cells.msh 100" still works.
+MESH_LABELS = {
+    "cavity_1968cells": "coarser",
+    "cavity_2528cells": "coarse",
+    "cavity_5432cells": "normal",
+    "cavity_10504cells": "fine",
+    "cavity_15152cells": "finest",
+}
+mesh_stem = Path(args.mesh).stem
+mesh_label = os.environ.get("CAVITY_MESH") or MESH_LABELS.get(mesh_stem, mesh_stem)
 
 meshData = gmsh.read_from_msh(args.mesh, MPI.COMM_WORLD, rank=0, gdim=2)
 mesh = meshData.mesh
@@ -162,8 +178,7 @@ print(f"Solver finished after {total_iterations} total Picard iteration(s) "
       f"across {len(continuation_steps)} continuation stage(s), "
       f"rel_change={rel_change:.2e}, time={t_elapsed:.1f}s")
 
-mesh_stem = Path(args.mesh).stem
-results_dir = Path(__file__).parent / "results" / "strong" / mesh_stem / f"Re_{Re:g}"
+results_dir = Path(__file__).parent / "results" / f"Re_{Re:g}" / mesh_label / "strong"
 results_dir.mkdir(parents=True, exist_ok=True)
 with VTKFile(mesh.comm, results_dir / "u.pvd", "w") as f:
     f.write_function(u_)
@@ -179,6 +194,6 @@ with open(timing_path, "a") as f:
     if write_header:
         f.write("# mesh method Re iterations time_s omega converged\n")
     f.write(
-        f"{mesh_stem} strong {Re:g} {total_iterations} {t_elapsed:.3f} "
+        f"{mesh_label} strong {Re:g} {total_iterations} {t_elapsed:.3f} "
         f"{picard_omega:g} {int(rel_change < picard_tol)}\n"
     )
