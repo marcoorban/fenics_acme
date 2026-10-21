@@ -92,3 +92,52 @@ from `mesh.py`'s cell-count filename (see `MESH_LABELS` in each), and
 The three BC-method folders match the script names directly now: `fem_strong.py` ->
 `strong`, `fem_weak_SUPG.py` (Nitsche + SUPG) -> `weak_SUPG`, `fem_weak.py` (Nitsche
 only) -> `weak`.
+
+## SUPG residual completeness (fixed 2026-10-21)
+
+`fem_weak_SUPG.py`'s SUPG term used to be built from an **incomplete residual** --
+`R1 = dot(u_n, nabla_grad(u))` was the convective term only, with the diffusive term
+(`-nu*div(grad(u))`) deliberately left out: including it meant differentiating the P2
+velocity field's second derivatives inside a bilinear form scaled by an unbounded
+`tau`, which severely ill-conditioned the system.
+
+A *correctly consistent* stabilization term vanishes identically when evaluated at the
+exact solution, since the true PDE residual is zero there by definition -- that's what
+guarantees it only damps genuine error without biasing the answer. A partial residual
+breaks that property, so it doesn't just damp oscillations, it injects a systematic
+offset. **Confirmed empirically** (Re=400, coarse mesh): `weak_SUPG` undershot both the
+Ghia et al. (1982) benchmark and the plain `weak` (no-SUPG) result at every extremum,
+even in a regime where SUPG should matter a lot (46.6% of cells have local Peclet
+number `Pe_h > 1` there, from `peclet_field.py`).
+
+**Fix**: comparing against `cylinder/fem/solver/solvers.py`'s `ChorinWeak` class showed
+its own SUPG residual already includes the viscous term, and its `tau` has an extra
+`(2/dt)**2` term cavity's lacked -- that's what lets it get away with the diffusive
+term at all, since `(2/dt)**2` caps `tau` regardless of how small `h`/`nu` get. Cavity
+is steady (no real `dt`), so `dt_pseudo = L/U_lid` (domain-crossing time at the lid
+speed) was introduced purely to provide the same cap -- a **pseudo-transient
+continuation** device with no physical role anywhere else in this solver, existing
+solely to bound `tau`. `R1` is now `dot(u_n, nabla_grad(u)) - nu*div(grad(u))`.
+
+**Still not included**: the pressure-gradient term `grad(p)`. This has nothing to do
+with PSPG (pressure-stabilizing Petrov-Galerkin, which fixes the LBB/inf-sup
+instability of *equal-order* velocity-pressure spaces like P1-P1) -- this solver uses
+Taylor-Hood (P2 velocity, P1 pressure), which already satisfies LBB with no
+stabilization needed for that. The gap is narrower and simpler than that: SUPG's own
+`R1` is supposed to be the *full momentum-equation residual*
+(`-nu*div(grad(u)) + (u.grad)u + grad(p)`), and `grad(p)` is a term of that equation
+regardless of inf-sup considerations. Cylinder's own `R1` doesn't include it either,
+but legitimately not because of LBB -- Chorin's splitting genuinely excludes pressure
+from the step SUPG stabilizes there (Step 1 has no pressure term in its own `F1` to
+begin with). Cavity's monolithic velocity-pressure system has no such excuse: pressure
+really is part of the same equation `u` is solved from, so leaving `grad(p)` out of
+`R1` is a real (if small-looking) incompleteness specific to this case.
+
+**Re-measured after the fix (Re=400, coarse mesh), and the undershoot is still there**:
+at the `u`-vertical trough, `strong`=`-1.246`, plain `weak`=`-0.969` (22% low),
+`weak_SUPG`=`-0.720` (42% low) -- `weak_SUPG` is still clearly worse than the no-SUPG
+variant. So the diffusive-term incompleteness was *not* the dominant cause of the bias;
+the still-missing `grad(p)` term looks like the more likely culprit. The "correctly
+consistent -> doesn't vanish at the true solution -> biases rather than damps"
+argument above still applies, just to the remaining incompleteness (missing pressure)
+instead of the one just fixed.

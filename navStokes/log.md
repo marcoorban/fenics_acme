@@ -255,6 +255,77 @@ future case's validation plots, e.g. cylinder drag/lift/Strouhal comparisons):
   etc.) needs to be built from the same linearization the base equation
   uses, or it stops being consistent too.
 
+- **[cavity]** — **Fixing a stabilization term's Picard-consistency (see the entry
+  above) is necessary but not sufficient — a *consistent* stabilization term must
+  also be built from the FULL equation residual, or it still biases the solution.**
+  After making `fem_weak_SUPG.py`'s SUPG term properly bilinear-in-`u` (consistent
+  with the fixed Picard scheme), it *still* undershoots both the Ghia et al. (1982)
+  benchmark and the plain no-SUPG variant at every extremum, confirmed at Re=400 on
+  the coarse mesh (`results/Re_400/coarse/dat/centerline.png`) — e.g. the `u`-vertical
+  trough sits at `~-1.3` for Ghia/strong-BC, `~-1.25` for the no-SUPG weak variant, but
+  only `~-0.5` for the SUPG one. This is the *opposite* of "SUPG's effect is too small
+  to matter" (that was true at Re=100, and is expected/correct there — Pe_h<1
+  everywhere, nothing to stabilize); at Re=400 SUPG is clearly engaged (46.6% of cells
+  have local Peclet number `Pe_h>1`) and the effect is large and wrong-signed.
+  **Root cause: `R1 = dot(u_n, nabla_grad(u))` only contains the convective part of the
+  momentum residual** — the diffusive term (`-nu*div(grad(u))`) was deliberately
+  omitted (differentiating a P2 field's second derivatives inside a bilinear form
+  scaled by an unbounded `tau` severely ill-conditions the system), and the
+  pressure-gradient term was never included either. The textbook guarantee that
+  SUPG only damps genuine error — because a *true* residual is exactly zero at the
+  exact solution, so the stabilization term vanishes there too — requires the FULL
+  residual. A partial residual is not zero at the exact solution, so the "stabilization"
+  term doesn't vanish there either; it adds a persistent, systematic offset instead of
+  a correction that disappears as the solution converges. General lesson: before
+  trusting a Petrov-Galerkin/residual-based stabilization scheme, check that every
+  term of the actual PDE operator appears in the residual it's built from — leaving
+  one out for numerical-conditioning reasons is a legitimate engineering tradeoff, but
+  it silently converts "stabilizer" into "biased forcing term," and the two look
+  identical from the diagnostics alone (smaller oscillations) without checking against
+  an independent benchmark.
+  **Fixed 2026-10-21, after comparing against `cylinder/fem/solver/solvers.py`'s
+  `ChorinWeak` class**, which turns out to already do this correctly: its own SUPG
+  residual *does* include the viscous term (`R1 = rho/k*(u-u_n) +
+  rho*dot(u_n,nabla_grad(0.5*(u+u_n))) - 0.5*mu*div(grad(u+u_n)) - f` — unsteady +
+  convection + viscous + forcing, i.e. the actual full residual of the equation that
+  solver's Step 1 solves), and its `tau` has an extra `(2/dt)**2` term cavity's lacked
+  entirely (cavity is steady, so there's no real `dt` anywhere). That term is what let
+  cylinder get away with including the diffusive term at all: `(2/dt)**2` puts a hard
+  ceiling on `tau` regardless of how small `h` or `nu` get, which is exactly the
+  "unbounded tau" cavity's own comment flagged as the problem. Applied the same fix to
+  `fem_weak_SUPG.py`: added the viscous term back into `R1`
+  (`R1 = dot(u_n, nabla_grad(u)) - nu*div(grad(u))`, sign matching the strong-form
+  momentum equation `-nu*div(grad(u)) + (u.grad)u + grad(p) = 0`), and introduced an
+  artificial `dt_pseudo = L/U_lid` (domain-crossing time at the lid speed) purely to
+  add the same `(2/dt_pseudo)**2` cap to `tau` — a number with no physical role
+  anywhere else in this steady solver, existing solely to bound the stabilization
+  parameter the way a real timestep incidentally does in an unsteady scheme. This is a
+  general pattern worth remembering: **pseudo-transient continuation** (inventing an
+  artificial timescale purely to regularize/bound a steady-state computation) is a
+  legitimate, standard technique, not a hack — borrow the physically-motivated bound a
+  transient scheme gets "for free" even when solving a genuinely steady problem. The
+  pressure-gradient term `grad(p)` is still not included — and to be precise about
+  why that matters, this has nothing to do with PSPG (pressure-stabilizing
+  Petrov-Galerkin, which exists to fix the LBB/inf-sup instability of *equal-order*
+  velocity-pressure spaces like P1-P1): this solver uses Taylor-Hood (P2 velocity, P1
+  pressure), which already satisfies LBB on its own, no PSPG needed. The gap is just
+  that SUPG's own `R1` is supposed to be the full momentum-equation residual, and
+  `grad(p)` is part of that equation regardless of inf-sup considerations. Cylinder's
+  `R1` skips it too, but legitimately — Chorin's splitting means Step 1's own equation
+  genuinely has no pressure term in it. Cavity's monolithic velocity-pressure coupling
+  has no such excuse: pressure really is part of the same equation `u` is solved from
+  there, so this remains a known gap, just a smaller/more precisely-understood one
+  than before.
+  **Re-measured after this fix (Re=400, coarse mesh) and the undershoot is still
+  there, barely changed**: at the `u`-vertical trough, `strong`=`-1.246`, plain
+  `weak`=`-0.969` (22% low), `weak_SUPG`=`-0.720` (42% low) — `weak_SUPG` is still
+  clearly worse than the no-SUPG variant, by roughly the same margin as before this
+  fix. So the diffusive-term incompleteness was *not* the dominant cause of the bias
+  after all; the still-missing pressure-gradient term now looks like the more likely
+  culprit. Good reminder that fixing one identified incompleteness in a
+  residual-based scheme doesn't let you assume the bias is gone — verify against the
+  benchmark again, because another missing term can produce a very similar symptom.
+
 - **[cylinder]** — **MPI parallelism for FEniCSx/dolfinx scripts is set at the launcher,
   not in the script.** dolfinx scripts (e.g. `cylinder/fem/dokken/navStokes.py`) import
   `mpi4py.MPI` and pass `MPI.COMM_WORLD` into mesh reads/solves — that communicator adapts

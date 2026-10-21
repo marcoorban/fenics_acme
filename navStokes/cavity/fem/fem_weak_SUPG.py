@@ -152,24 +152,31 @@ for tag, g in dirichlet_boundaries:
     nitsche_a00 += (beta * nu / h) * dot(u, w) * ds_tag  # penalty (bilinear part)
     nitsche_L0 += (beta * nu / h) * dot(g, w) * ds_tag  # penalty (known part)
 
-# SUPG, stabilizing convection only: R1 = (u_n . grad)u, Picard-
-# consistent with the convective term above -- u_n is the known
-# transport velocity, u is the real trial function. The diffusive
-# (-nu*div(grad(u))) piece is deliberately left out -- feeding a P2
-# field's strong-form (second-derivative) Laplacian into a bilinear form,
-# scaled by an unbounded tau (no time step here to cap it, unlike the
-# unsteady reference), severely ill-conditions the system and makes the
-# Nitsche-enforced BC go unsatisfied (confirmed empirically: with it,
-# lid mean velocity collapses to ~0.5 instead of ~20 and the solve takes
-# 15x longer; without it, the solution is sane). R1 now depends on the
-# trial function u, so SUPG is a genuine bilinear term and belongs in
-# a00, not L0.
+# SUPG, now stabilizing against the FULL momentum residual: R1 =
+# (u_n.grad)u - nu*div(grad(u)), Picard-consistent with the bulk
+# convective/diffusive terms above (u_n known, u the real trial
+# function; sign on the diffusive piece matches the strong-form
+# momentum equation -nu*div(grad(u)) + (u.grad)u + grad(p) = 0, same
+# convention cylinder/fem/solver/solvers.py's ChorinWeak uses for its
+# own R1). Previously the diffusive piece was left out entirely, because
+# feeding a P2 field's second-derivative Laplacian into a bilinear form
+# scaled by an UNBOUNDED tau severely ill-conditioned the system. Fixed
+# by capping tau the way an unsteady solver's own dt naturally does
+# (see ChorinWeak's tau, which has a (2/dt)**2 term): dt_pseudo below is
+# an artificial, physically-meaningless timescale that exists ONLY to
+# bound tau -- it plays no role anywhere else in this (steady) solver.
+# Tied to this case's own domain-crossing time at the lid speed
+# (L/U_lid) so the cap scales sensibly with Re instead of being an
+# arbitrary fixed constant.
 a_transport = u_n  # frozen transport velocity for SUPG's tau/R1
+dt_pseudo = L / U_lid  # artificial -- bounds tau only, see note above
 tau = 1 / sqrt(
-    (2 * sqrt(dot(a_transport, a_transport)) / h) ** 2 + (4 * nu / h**2) ** 2
+    (2 / dt_pseudo) ** 2
+    + (2 * sqrt(dot(a_transport, a_transport)) / h) ** 2
+    + (4 * nu / h**2) ** 2
 )
 supg_test = dot(a_transport, nabla_grad(w))
-R1 = dot(u_n, nabla_grad(u))
+R1 = dot(u_n, nabla_grad(u)) - nu * div(grad(u))
 nitsche_a00 += tau * dot(supg_test, R1) * dx  # SUPG (bilinear part)
 
 zero_pp = Constant(mesh, PETSc.ScalarType(0)) * p * q * dx  # explicit zero
