@@ -153,21 +153,29 @@ for tag, g in dirichlet_boundaries:
     nitsche_L0 += (beta * nu / h) * dot(g, w) * ds_tag  # penalty (known part)
 
 # SUPG, now stabilizing against the FULL momentum residual: R1 =
-# (u_n.grad)u - nu*div(grad(u)), Picard-consistent with the bulk
-# convective/diffusive terms above (u_n known, u the real trial
-# function; sign on the diffusive piece matches the strong-form
-# momentum equation -nu*div(grad(u)) + (u.grad)u + grad(p) = 0, same
-# convention cylinder/fem/solver/solvers.py's ChorinWeak uses for its
-# own R1). Previously the diffusive piece was left out entirely, because
-# feeding a P2 field's second-derivative Laplacian into a bilinear form
-# scaled by an UNBOUNDED tau severely ill-conditioned the system. Fixed
-# by capping tau the way an unsteady solver's own dt naturally does
-# (see ChorinWeak's tau, which has a (2/dt)**2 term): dt_pseudo below is
-# an artificial, physically-meaningless timescale that exists ONLY to
-# bound tau -- it plays no role anywhere else in this (steady) solver.
-# Tied to this case's own domain-crossing time at the lid speed
-# (L/U_lid) so the cap scales sensibly with Re instead of being an
-# arbitrary fixed constant.
+# (u_n.grad)u - nu*div(grad(u)) + grad(p), Picard-consistent with the
+# bulk convective/diffusive/pressure terms above (u_n known, u/p the
+# real trial functions; signs match the strong-form momentum equation
+# -nu*div(grad(u)) + (u.grad)u + grad(p) = 0). The diffusive piece was
+# previously left out entirely, because feeding a P2 field's
+# second-derivative Laplacian into a bilinear form scaled by an
+# UNBOUNDED tau severely ill-conditioned the system. Fixed by capping
+# tau the way an unsteady solver's own dt naturally does (see
+# cylinder/fem/solver/solvers.py's ChorinWeak, whose tau has a
+# (2/dt)**2 term): dt_pseudo below is an artificial, physically-
+# meaningless timescale that exists ONLY to bound tau -- it plays no
+# role anywhere else in this (steady) solver. Tied to this case's own
+# domain-crossing time at the lid speed (L/U_lid) so the cap scales
+# sensibly with Re instead of being an arbitrary fixed constant.
+# R1 depends on BOTH trial functions now (u and p), so it splits across
+# two matrix blocks: the u-dependent piece is still bilinear in (u, w)
+# and belongs in a00 (velocity-velocity); the new grad(p) piece is
+# bilinear in (p, w) and belongs in the velocity-pressure block instead
+# (added to `pressure` below), not a00 -- this is NOT PSPG (that
+# stabilizes the continuity/q-test equation for LBB-unstable equal-order
+# spaces; this solver is Taylor-Hood, already LBB-stable). It's just
+# SUPG's own residual being the full momentum equation, which includes
+# grad(p) regardless of inf-sup considerations.
 a_transport = u_n  # frozen transport velocity for SUPG's tau/R1
 dt_pseudo = L / U_lid  # artificial -- bounds tau only, see note above
 tau = 1 / sqrt(
@@ -176,13 +184,15 @@ tau = 1 / sqrt(
     + (4 * nu / h**2) ** 2
 )
 supg_test = dot(a_transport, nabla_grad(w))
-R1 = dot(u_n, nabla_grad(u)) - nu * div(grad(u))
-nitsche_a00 += tau * dot(supg_test, R1) * dx  # SUPG (bilinear part)
+R1_u = dot(u_n, nabla_grad(u)) - nu * div(grad(u))
+R1_p = grad(p)
+nitsche_a00 += tau * dot(supg_test, R1_u) * dx  # SUPG (bilinear part, velocity-velocity block)
+supg_pressure = tau * dot(supg_test, R1_p) * dx  # SUPG (bilinear part, velocity-pressure block)
 
 zero_pp = Constant(mesh, PETSc.ScalarType(0)) * p * q * dx  # explicit zero
 # block, not None -- the pressure pin BC below needs a real (1, 1) block
 # to apply to.
-a = [[diffusive + nitsche_a00 + convective, pressure], [continuity, zero_pp]]
+a = [[diffusive + nitsche_a00 + convective, pressure + supg_pressure], [continuity, zero_pp]]
 L = [nitsche_L0, Constant(mesh, PETSc.ScalarType(0)) * q * dx]
 
 # Pressure has no Dirichlet BC anywhere else (grad(p)=0 is natural on

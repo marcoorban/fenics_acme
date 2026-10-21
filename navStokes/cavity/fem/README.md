@@ -119,25 +119,37 @@ speed) was introduced purely to provide the same cap -- a **pseudo-transient
 continuation** device with no physical role anywhere else in this solver, existing
 solely to bound `tau`. `R1` is now `dot(u_n, nabla_grad(u)) - nu*div(grad(u))`.
 
-**Still not included**: the pressure-gradient term `grad(p)`. This has nothing to do
-with PSPG (pressure-stabilizing Petrov-Galerkin, which fixes the LBB/inf-sup
-instability of *equal-order* velocity-pressure spaces like P1-P1) -- this solver uses
-Taylor-Hood (P2 velocity, P1 pressure), which already satisfies LBB with no
-stabilization needed for that. The gap is narrower and simpler than that: SUPG's own
+**Re-measured after that fix (Re=400, coarse mesh), and the undershoot was still
+there**: at the `u`-vertical trough, `strong`=`-1.246`, plain `weak`=`-0.969` (22%
+low), `weak_SUPG`=`-0.720` (42% low) -- `weak_SUPG` was still clearly worse than the
+no-SUPG variant. So the diffusive-term incompleteness wasn't the dominant cause of the
+bias; the remaining gap was `R1` still missing the pressure-gradient term `grad(p)`.
+This has nothing to do with PSPG (pressure-stabilizing Petrov-Galerkin, which fixes
+the LBB/inf-sup instability of *equal-order* velocity-pressure spaces like P1-P1) --
+this solver uses Taylor-Hood (P2 velocity, P1 pressure), which already satisfies LBB
+with no stabilization needed for that. The gap was narrower and simpler: SUPG's own
 `R1` is supposed to be the *full momentum-equation residual*
 (`-nu*div(grad(u)) + (u.grad)u + grad(p)`), and `grad(p)` is a term of that equation
 regardless of inf-sup considerations. Cylinder's own `R1` doesn't include it either,
 but legitimately not because of LBB -- Chorin's splitting genuinely excludes pressure
 from the step SUPG stabilizes there (Step 1 has no pressure term in its own `F1` to
 begin with). Cavity's monolithic velocity-pressure system has no such excuse: pressure
-really is part of the same equation `u` is solved from, so leaving `grad(p)` out of
-`R1` is a real (if small-looking) incompleteness specific to this case.
+really is part of the same equation `u` is solved from.
 
-**Re-measured after the fix (Re=400, coarse mesh), and the undershoot is still there**:
-at the `u`-vertical trough, `strong`=`-1.246`, plain `weak`=`-0.969` (22% low),
-`weak_SUPG`=`-0.720` (42% low) -- `weak_SUPG` is still clearly worse than the no-SUPG
-variant. So the diffusive-term incompleteness was *not* the dominant cause of the bias;
-the still-missing `grad(p)` term looks like the more likely culprit. The "correctly
-consistent -> doesn't vanish at the true solution -> biases rather than damps"
-argument above still applies, just to the remaining incompleteness (missing pressure)
-instead of the one just fixed.
+**Fixed (2026-10-21, same day): added `grad(p)` to `R1`.** Since `R1` now depends on
+both trial functions (`u` and `p`), the SUPG term no longer belongs entirely in the
+velocity-velocity block -- it splits: the `u`-dependent piece
+(`dot(u_n, nabla_grad(u)) - nu*div(grad(u))`) stays in `nitsche_a00` as before, and the
+new `grad(p)` piece becomes its own bilinear form in `(w, p)`, added into the
+velocity-pressure block alongside the existing `pressure = -p*div(w)*dx` term:
+`a = [[diffusive + nitsche_a00 + convective, pressure + supg_pressure], [continuity, zero_pp]]`.
+
+**Re-measured again (Re=400, coarse mesh) -- this fixed it**: `weak_SUPG` moved from
+`-0.720` (42% low) to `-0.976` (22% low), now matching plain `weak` (`-0.969`) almost
+exactly, both panels. The systematic undershoot is gone; the remaining `weak`/`weak_SUPG`
+vs. `strong`/Ghia gap is just the ordinary Nitsche-penalty approximation bias (weak BCs
+don't enforce the boundary condition exactly), not a SUPG artifact. Confirms the
+diagnosis: a stabilization term built from a genuinely complete residual does what the
+textbook guarantee promises -- `weak_SUPG` and `weak` should (and now do) agree closely,
+since a correctly consistent SUPG term adds ~nothing extra at a solution that's already
+smooth enough not to need stabilizing.

@@ -304,27 +304,37 @@ future case's validation plots, e.g. cylinder drag/lift/Strouhal comparisons):
   artificial timescale purely to regularize/bound a steady-state computation) is a
   legitimate, standard technique, not a hack — borrow the physically-motivated bound a
   transient scheme gets "for free" even when solving a genuinely steady problem. The
-  pressure-gradient term `grad(p)` is still not included — and to be precise about
-  why that matters, this has nothing to do with PSPG (pressure-stabilizing
-  Petrov-Galerkin, which exists to fix the LBB/inf-sup instability of *equal-order*
-  velocity-pressure spaces like P1-P1): this solver uses Taylor-Hood (P2 velocity, P1
-  pressure), which already satisfies LBB on its own, no PSPG needed. The gap is just
-  that SUPG's own `R1` is supposed to be the full momentum-equation residual, and
-  `grad(p)` is part of that equation regardless of inf-sup considerations. Cylinder's
-  `R1` skips it too, but legitimately — Chorin's splitting means Step 1's own equation
-  genuinely has no pressure term in it. Cavity's monolithic velocity-pressure coupling
-  has no such excuse: pressure really is part of the same equation `u` is solved from
-  there, so this remains a known gap, just a smaller/more precisely-understood one
-  than before.
-  **Re-measured after this fix (Re=400, coarse mesh) and the undershoot is still
-  there, barely changed**: at the `u`-vertical trough, `strong`=`-1.246`, plain
-  `weak`=`-0.969` (22% low), `weak_SUPG`=`-0.720` (42% low) — `weak_SUPG` is still
-  clearly worse than the no-SUPG variant, by roughly the same margin as before this
-  fix. So the diffusive-term incompleteness was *not* the dominant cause of the bias
-  after all; the still-missing pressure-gradient term now looks like the more likely
-  culprit. Good reminder that fixing one identified incompleteness in a
-  residual-based scheme doesn't let you assume the bias is gone — verify against the
-  benchmark again, because another missing term can produce a very similar symptom.
+  pressure-gradient term `grad(p)` was still not included, and re-measuring (Re=400,
+  coarse mesh) showed the undershoot barely changed: `strong`=`-1.246`, plain
+  `weak`=`-0.969` (22% low), `weak_SUPG`=`-0.720` (42% low) — still clearly worse than
+  the no-SUPG variant, by roughly the same margin as before this fix. So the
+  diffusive-term incompleteness was *not* the dominant cause of the bias after all.
+  Good reminder that fixing one identified incompleteness in a residual-based scheme
+  doesn't let you assume the bias is gone — verify against the benchmark again,
+  because another missing term can produce a very similar symptom.
+  **Added `grad(p)` to `R1` too, same day, and this time it fixed it.** To be precise
+  about why `grad(p)` belongs there: this has nothing to do with PSPG
+  (pressure-stabilizing Petrov-Galerkin, which exists to fix the LBB/inf-sup
+  instability of *equal-order* velocity-pressure spaces like P1-P1) — this solver uses
+  Taylor-Hood (P2 velocity, P1 pressure), already LBB-stable, no PSPG needed. It's
+  simply that SUPG's own `R1` is supposed to be the full momentum-equation residual,
+  and `grad(p)` is part of that equation regardless of inf-sup considerations.
+  Cylinder's `R1` skips it too, but legitimately — Chorin's splitting means Step 1's
+  own equation genuinely has no pressure term in it. Cavity's monolithic
+  velocity-pressure coupling has no such excuse. Mechanically, since `R1` now depends
+  on *both* trial functions, the SUPG term no longer lives entirely in the
+  velocity-velocity block: the `u`-dependent piece stays in `nitsche_a00`, and the new
+  `grad(p)` piece becomes its own bilinear form in `(w, p)`, added to the existing
+  `pressure` term in the velocity-pressure block instead
+  (`a = [[diffusive + nitsche_a00 + convective, pressure + supg_pressure], [...]]`).
+  Re-measured again (Re=400, coarse mesh): `weak_SUPG` moved from `-0.720` (42% low)
+  to `-0.976` (22% low) — now matching plain `weak` (`-0.969`) almost exactly, on both
+  the `u`-vertical and `v`-horizontal panels. The systematic undershoot is gone; the
+  remaining `weak`/`weak_SUPG` vs. `strong`/Ghia gap is just the ordinary
+  Nitsche-penalty approximation bias, not a SUPG artifact. Confirms the diagnosis
+  cleanly: once a stabilization term is built from a genuinely complete residual, it
+  behaves the way the textbook guarantee promises — agreeing closely with the
+  no-stabilization result wherever the solution doesn't actually need stabilizing.
 
 - **[cylinder]** — **MPI parallelism for FEniCSx/dolfinx scripts is set at the launcher,
   not in the script.** dolfinx scripts (e.g. `cylinder/fem/dokken/navStokes.py`) import
