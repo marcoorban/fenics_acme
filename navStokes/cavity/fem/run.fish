@@ -13,7 +13,7 @@ end
 
 set meshFile $argv[1]
 set reynolds $argv[2]
-set solverScript fem_strong_relaxed.py
+set solverScript fem_newton.py
 if test (count $argv) -ge 3
     set solverScript $argv[3]
 end
