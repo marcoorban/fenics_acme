@@ -8,7 +8,7 @@ from dolfinx import fem
 from dolfinx.io import gmsh, VTKFile
 from dolfinx.fem.petsc import LinearProblem
 from dolfinx.geometry import bb_tree, compute_collisions_points, compute_colliding_cells
-from ufl import dot, grad, inner, dx, div
+from ufl import dot, grad, inner, dx, div, nabla_grad
 from mpi4py import MPI
 from petsc4py import PETSc
 from basix.ufl import element, mixed_element
@@ -28,7 +28,9 @@ def eval_at_points(mesh, function, points):
     tree = bb_tree(mesh, mesh.topology.dim)
     candidates = compute_collisions_points(tree, points)
     colliding = compute_colliding_cells(mesh, candidates, points)
-    cells = np.array([colliding.links(i)[0] for i in range(len(points))], dtype=np.int32)
+    cells = np.array(
+        [colliding.links(i)[0] for i in range(len(points))], dtype=np.int32
+    )
     return function.eval(points, cells)
 
 
@@ -36,12 +38,13 @@ parser = argparse.ArgumentParser(
     prog="Cylinder cavity solver",
     description="""Solves incompressible Navier-Stokes equation in cavity flow
             using FEM method""",
-    usage="fem.py mesh Re",
+    usage="fem.py mesh Re results_dir",
 )
 parser.add_argument("mesh", help="Path to the .msh file to read.")
 parser.add_argument(
     "reynolds", type=float, help="Reynolds number to use in simulation."
 )
+parser.add_argument("results_dir", help="Directory to write results into.")
 args = parser.parse_args()
 
 assert args.reynolds >= 1.0
@@ -131,7 +134,7 @@ f = fem.Constant(mesh, PETSc.ScalarType((0, 0)))
 ### Trying explicit scheme with strongly enforced boundary conditions. This
 # probably will not work.
 # LHS Navier-Stokes
-convection = inner(dot(u_n, grad(u)), v) * dx
+convection = inner(dot(u_n, nabla_grad(u)), v) * dx
 # RHS Navier-Stokes
 pressure = inner(-grad(p), v) * dx
 diffusion = nu * inner(grad(u), grad(v)) * dx
@@ -153,7 +156,9 @@ for re in re_progress:
     re_progress.set_postfix(Re=re)
     tqdm.write(f"Solving at Re = {re:g}")
     U_lid = re * nuVal / length
-    lid_fn.interpolate(lambda x: np.vstack([np.full(x.shape[1], U_lid), np.zeros(x.shape[1])]))
+    lid_fn.interpolate(
+        lambda x: np.vstack([np.full(x.shape[1], U_lid), np.zeros(x.shape[1])])
+    )
     for picard_iter in range(max_picard_iters):
         problem.solve()
         uh = wh.sub(0).collapse()  # Velocity component of the new iterate
@@ -175,8 +180,7 @@ ph = wh.sub(1).collapse()
 uh.name = "u"
 ph.name = "p"
 
-mesh_label = Path(args.mesh).stem
-results_dir = Path(__file__).parent / "results" / f"Re_{TARGET_RE:g}" / mesh_label
+results_dir = Path(args.results_dir)
 dat_dir = results_dir / "dat"
 dat_dir.mkdir(parents=True, exist_ok=True)
 
@@ -193,9 +197,7 @@ n_sample = 129
 y_line = np.linspace(0.0, 1.0, n_sample)
 x_line = np.linspace(0.0, 1.0, n_sample)
 
-vertical_points = np.column_stack(
-    [0.5 * np.ones(n_sample), y_line, np.zeros(n_sample)]
-)
+vertical_points = np.column_stack([0.5 * np.ones(n_sample), y_line, np.zeros(n_sample)])
 horizontal_points = np.column_stack(
     [x_line, 0.5 * np.ones(n_sample), np.zeros(n_sample)]
 )

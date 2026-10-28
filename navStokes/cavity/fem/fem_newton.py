@@ -39,12 +39,13 @@ parser = argparse.ArgumentParser(
     description="""Solves incompressible Navier-Stokes equation in cavity flow
             using FEM method, via Newton's method (SNES) on the full
             nonlinear residual instead of Picard linearization.""",
-    usage="fem_newton.py mesh Re",
+    usage="fem_newton.py mesh Re results_dir",
 )
 parser.add_argument("mesh", help="Path to the .msh file to read.")
 parser.add_argument(
     "reynolds", type=float, help="Reynolds number to use in simulation."
 )
+parser.add_argument("results_dir", help="Directory to write results into.")
 args = parser.parse_args()
 
 assert args.reynolds >= 1.0
@@ -221,8 +222,7 @@ ph = solution.sub(1).collapse()
 uh.name = "u"
 ph.name = "p"
 
-mesh_label = Path(args.mesh).stem
-results_dir = Path(__file__).parent / "results" / f"Re_{TARGET_RE:g}" / mesh_label
+results_dir = Path(args.results_dir)
 dat_dir = results_dir / "dat"
 dat_dir.mkdir(parents=True, exist_ok=True)
 

@@ -18,19 +18,20 @@ if test (count $argv) -ge 3
     set solverScript $argv[3]
 end
 
-# Must match the solver script's own results_dir (mesh_label =
-# Path(mesh).stem, Re folder = f"Re_{reynolds:g}") -- both sides just
-# take the CLI value as-is, so pass reynolds the same way each time
-# (e.g. "400", not "400.0") to keep the two in sync.
+# Built once here and passed to the solver script, instead of having
+# it rebuild the same path from mesh/Re/its own name -- the two can't
+# drift out of sync if there's only one place that constructs it.
 set meshLabel (basename $meshFile .msh)
-set resultsDir results/Re_$reynolds/$meshLabel
+set solverScriptStem (path basename -E $solverScript)
+set resultsDir results/Re_$reynolds/$meshLabel/$solverScriptStem
 
-python3 $solverScript $meshFile $reynolds; or begin
+python3 $solverScript $meshFile $reynolds $resultsDir; or begin
     echo "$solverScript failed"
     exit 1
 end
 
 python3 plot_fields.py $resultsDir; or echo "plot_fields.py failed"
 python3 plot_centerlines.py $resultsDir $reynolds; or echo "plot_centerlines.py failed"
+python3 plot_peclet.py $meshFile $resultsDir; or echo "plot_peclet.py failed"
 
-echo "Done -- see $resultsDir/fields.png and $resultsDir/centerlines.png"
+echo "Done -- see $resultsDir/fields.png, $resultsDir/centerlines.png, and $resultsDir/peclet.png"
