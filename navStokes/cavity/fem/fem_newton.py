@@ -133,10 +133,24 @@ f = fem.Constant(mesh, PETSc.ScalarType((0, 0)))
 
 # Navier-Stokes terms, strongly enforced boundary conditions. Same weak
 # form as fem_strong_relaxed.py, except convection now uses the real
-# unknown u on both sides (dot(u, grad(u)), genuinely nonlinear/
-# quadratic in u) instead of a lagged u_n -- Newton solves this directly
-# rather than linearizing it by hand.
-convection = inner(dot(u, grad(u)), v) * dx
+# unknown u on both sides (genuinely nonlinear/quadratic in u) instead
+# of a lagged u_n -- Newton solves this directly rather than
+# linearizing it by hand.
+#
+# dot(grad(u), u), NOT dot(u, grad(u)): UFL's grad(u)[i,j] = d(u_i)/
+# d(x_j), so (u.grad)u (component j = sum_i u_i * d(u_j)/d(x_i)) is the
+# matrix-vector contraction dot(grad(u), u), contracting grad(u)'s
+# SECOND index against u. dot(u, grad(u)) contracts the FIRST index
+# instead, giving sum_i u_i * d(u_i)/d(x_j) = grad(0.5*dot(u,u)) -- a
+# pure gradient field, not a transport term. Verified numerically
+# against a hand-computed (u.grad)u on an exactly-representable linear
+# field. Since a pure-gradient "convection" term is fully absorbable
+# into the pressure unknown (only grad(p) appears, p is otherwise
+# unconstrained), that bug made every Re collapse onto the Re=1 Stokes
+# velocity field exactly rescaled -- confirmed empirically: the
+# Re=1 and Re=400 u_vertical.dat profiles were identical once divided
+# by their respective lid speeds, to 5 decimal places.
+convection = inner(dot(grad(u), u), v) * dx
 pressure = inner(-grad(p), v) * dx
 diffusion = nu * inner(grad(u), grad(v)) * dx
 continuity = -inner(q, div(u)) * dx

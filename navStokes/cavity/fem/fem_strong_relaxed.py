@@ -132,7 +132,14 @@ f = fem.Constant(mesh, PETSc.ScalarType((0, 0)))
 # Navier-Stokes terms, strongly enforced boundary conditions. Convection
 # is Picard-linearized (u_n lagged, see the under-relaxed update below).
 # LHS Navier-Stokes
-convection = inner(dot(u_n, grad(u)), v) * dx
+#
+# dot(grad(u), u_n), NOT dot(u_n, grad(u)): see fem_newton.py's comment
+# on its own (now-nonlinear) convection term for the full derivation --
+# dot(u_n, grad(u)) contracts the wrong index of grad(u) and does not
+# represent (u_n.grad)u. This was confirmed to make the solved velocity
+# field Re-independent (a bug, not just a convergence issue) before
+# being caught and fixed.
+convection = inner(dot(grad(u), u_n), v) * dx
 # RHS Navier-Stokes
 pressure = inner(-grad(p), v) * dx
 diffusion = nu * inner(grad(u), grad(v)) * dx
